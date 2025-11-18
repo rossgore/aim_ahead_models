@@ -1,0 +1,112 @@
+{
+  "model_version": "4.0.0",
+  "source": "NCI Colorectal Cancer Risk Assessment Tool",
+  "parameters": {
+    "age_baseline_risks": {
+      "description": "5-year colorectal cancer risk by age group (%)",
+      "source": "SEER incidence data and CCRAT validation studies",
+      "values": {
+        "45_49": 0.18,
+        "50_54": 0.28,
+        "55_59": 0.45,
+        "60_64": 0.72,
+        "65_69": 1.15,
+        "70_75": 1.65
+      }
+    },
+    "gender_multipliers": {
+      "description": "Risk adjustment factors by gender",
+      "source": "Multi-ethnic cohort studies",
+      "values": {
+        "male": 1.18,
+        "female": 0.85
+      }
+    },
+    "race_multipliers": {
+      "description": "Risk adjustment factors by race/ethnicity",
+      "source": "SEER incidence data by racial/ethnic groups",
+      "values": {
+        "white": 1.0,
+        "black": 1.28,
+        "hispanic": 0.82,
+        "asian": 1.15,
+        "other": 0.92
+      }
+    },
+    "income_multipliers": {
+      "description": "Risk adjustment factors by income level (lifestyle proxy)",
+      "source": "Socioeconomic health disparities research",
+      "values": {
+        "under_20k": 1.25,
+        "20k_35k": 1.12,
+        "35k_50k": 1.03,
+        "50k_75k": 0.96,
+        "over_75k": 0.88
+      }
+    },
+    "education_multipliers": {
+      "description": "Risk adjustment factors by education level (health literacy proxy)",
+      "source": "Health literacy and screening behavior studies",
+      "values": {
+        "less_than_hs": 1.2,
+        "hs_graduate": 1.08,
+        "some_college": 0.95,
+        "bachelor_plus": 0.85
+      }
+    }
+  },
+  "screening_parameters": {
+    "mortality_reduction": {
+      "value": 0.68,
+      "description": "Colorectal cancer mortality reduction from regular screening",
+      "source": "Cochrane systematic reviews and meta-analyses"
+    },
+    "screening_rates_by_insurance": {
+      "medicaid": 0.466,
+      "uninsured": 0.282,
+      "private": 0.598,
+      "source": "BRFSS and NHIS data"
+    }
+  },
+  "economic_parameters": {
+    "treatment_costs": {
+      "description": "Average cancer treatment costs by stage (USD)",
+      "source": "SEER-Medicare linked database analyses",
+      "values": {
+        "Stage_I": 31063,
+        "Stage_II": 39834,
+        "Stage_III": 45000,
+        "Stage_IV": 108599
+      }
+    },
+    "stage_distributions": {
+      "screened_population": {
+        "Stage_I": 0.42,
+        "Stage_II": 0.28,
+        "Stage_III": 0.21,
+        "Stage_IV": 0.09
+      },
+      "unscreened_population": {
+        "Stage_I": 0.18,
+        "Stage_II": 0.22,
+        "Stage_III": 0.35,
+        "Stage_IV": 0.25
+      }
+    }
+  },
+  "policy_parameters": {
+    "medicaid_loss_rate": {
+      "value": 0.146,
+      "description": "Proportion of Medicaid enrollees losing coverage under policy change",
+      "source": "Historical coverage transition analyses"
+    },
+    "time_horizon": {
+      "value": 10,
+      "description": "Projection time horizon in years"
+    },
+    "discount_rate": {
+      "value": 0.03,
+      "description": "Annual discount rate for cost calculations"
+    }
+  }
+}
