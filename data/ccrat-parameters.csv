@@ -1,0 +1,27 @@
+Parameter_Category,Parameter_Name,Parameter_Value,Description
+age_baseline_risk,risk_45to49,0.18,5-year unscreened CRC risk for age 45to49
+age_baseline_risk,risk_50to54,0.28,5-year unscreened CRC risk for age 50to54
+age_baseline_risk,risk_55to59,0.45,5-year unscreened CRC risk for age 55to59
+age_baseline_risk,risk_60to64,0.72,5-year unscreened CRC risk for age 60to64
+age_baseline_risk,risk_65to69,1.15,5-year unscreened CRC risk for age 65to69
+age_baseline_risk,risk_70to75,1.65,5-year unscreened CRC risk for age 70to75
+gender_multiplier,male,1.18,Risk adjustment multiplier for Male
+gender_multiplier,female,0.85,Risk adjustment multiplier for Female
+race_multiplier,white,1.0,Risk adjustment multiplier for White
+race_multiplier,black,1.28,Risk adjustment multiplier for Black
+race_multiplier,hispanic,0.82,Risk adjustment multiplier for Hispanic
+race_multiplier,asian,1.15,Risk adjustment multiplier for Asian
+race_multiplier,aian,0.92,Risk adjustment multiplier for AIAN
+race_multiplier,nhopi,0.92,Risk adjustment multiplier for NHOPI
+race_multiplier,someother,0.92,Risk adjustment multiplier for SomeOther
+race_multiplier,twoormore,0.92,Risk adjustment multiplier for TwoOrMore
+income_multiplier,under20k,1.25,Risk adjustment multiplier for Under20k income
+income_multiplier,20kto35k,1.12,Risk adjustment multiplier for 20kto35k income
+income_multiplier,35kto50k,1.03,Risk adjustment multiplier for 35kto50k income
+income_multiplier,50kto75k,0.96,Risk adjustment multiplier for 50kto75k income
+income_multiplier,over75k,0.88,Risk adjustment multiplier for Over75k income
+education_multiplier,lessthanhs,1.2,Risk adjustment multiplier for LessThanHS education
+education_multiplier,hsgraduate,1.08,Risk adjustment multiplier for HSGraduate education
+education_multiplier,somecollege,0.95,Risk adjustment multiplier for SomeCollege education
+education_multiplier,bachelorplus,0.85,Risk adjustment multiplier for BachelorPlus education
+screening_effectiveness,mortality_reduction_rate,0.68,Proportion of mortality reduction with screening
