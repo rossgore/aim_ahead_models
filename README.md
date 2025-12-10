@@ -1,454 +1,439 @@
-***
+# Integrated Synthetic Population & Medicaid Policy Pipeline for Colorectal Cancer Screening
 
-# Integrated Synthetic Population \& CRC Risk Pipeline
+This repository contains a **fully configurable, CSV-driven pipeline** for generating synthetic populations and modeling the health policy impacts of Medicaid coverage changes on colorectal cancer (CRC) screening and treatment costs.
+
+The pipeline consists of **4 integrated modules**:
+
+1. **`model.py`** — Generates synthetic populations with demographics, screening status, and CRC risk
+2. **`screening_calculator.py`** — Encapsulates reusable screening logic for both `model.py` and `medicaid_policy_simulator.py`
+3. **`medicaid_policy_simulator.py`** — Applies Medicaid policy scenarios and recomputes screening and economic costs
+4. **`colon_cancer_economics_model.py`** — Calculates healthcare costs based on screening status and cancer stage
+
+---
 
 ## Overview
 
-This repository contains `model.py`, a Python pipeline that generates geographically accurate synthetic populations for public health modeling. It is currently configured for **colorectal cancer (CRC)** screening and risk assessment at the **census tract** level.
+### Stage 1: Synthetic Population Generation (`model.py`)
 
-The pipeline has three independent, data-driven stages:
+Creates a geographically accurate synthetic population using **Iterative Proportional Fitting (IPF)** where:
+- Aggregate counts by Age, Gender, and Race/Ethnicity match ACS marginals
+- Joint distributions of Income, Education, and Health Insurance reflect Census microdata (ACS PUMS)
 
-1. Synthetic population generation using demographic data.
-2. Screening status assignment based on regional screening behavior.
-3. CRC risk estimation using a CCRAT-inspired risk model.
+**Key inputs:**
+- `demographics.csv` — ACS tract-level population counts
+- `ipf-joint-distributions.csv` — Census-based conditional distributions (P(Income|Race), P(Education|Race), etc.)
 
-All behavioral and risk parameters are configured via external CSV files, so they can be updated without modifying the source code.
+### Stage 2: Screening Status Assignment (`screening_calculator.py`, shared by `model.py` and `medicaid_policy_simulator.py`)
 
-A separate, fully configurable Medicaid policy simulator (`medicaid_policy_simulator.py`) operates on the synthetic population and uses the same screening logic (via `screening_calculator.py`) to recompute screening after coverage changes.
+Assigns each individual a screening status (Screened/Not_Screened) that:
+- Matches tract-level CRC screening prevalence
+- Reflects subgroup differences by age, race/ethnicity, and insurance (via BRFSS data)
 
-***
+**Key inputs:**
+- `colon-rates.csv` — Tract-level baseline screening rates
+- `screening-joint-distributions.csv` — BRFSS-derived adjustment factors by age, race, insurance
 
-## High-Level Pipeline
+**Implementation:** The `ScreeningCalculator` class encapsulates all screening logic, allowing both `model.py` and `medicaid_policy_simulator.py` to use identical screening calculations.
 
-The model executes in three stages:
+### Stage 3: CRC Risk Assessment (`model.py`)
 
-1. **Stage 1 – IPF-based synthetic population generation**
-Uses Census/ACS demographics and **IPF joint distributions** estimated from Census-based microdata (e.g., ACS PUMS) for Virginia or the southeast Virginia region.
-2. **Stage 2 – Screening status assignment**
-Uses tract-level screening rates and **screening joint adjustment factors** derived from **BRFSS** (Behavioral Risk Factor Surveillance System) for adults in the **southeast region of Virginia** (Richmond + Hampton Roads). The implementation is encapsulated in `screening_calculator.py` and reused by both `model.py` and `medicaid_policy_simulator.py`.
-3. **Stage 3 – CCRAT risk assessment**
-Uses a CSV of CCRAT-style parameters (age-specific baseline risks and multipliers) to estimate unscreened and screened 5‑year CRC risk for each individual.
+Estimates each individual's 5-year unscreened and screened CRC risk using a CCRAT-inspired model.
 
-All stages are independent and data-driven.
+**Key inputs:**
+- `ccrat-parameters.csv` — Age-specific baseline risks, multipliers for gender/race/income/education, screening effectiveness
 
-***
+**Formula:**
+```
+UnscreenedRisk = BaselineRisk(age) × Gender_Mult × Race_Mult × Income_Mult × Education_Mult
+ScreenedRisk = UnscreenedRisk × (1 - Screening_Effectiveness)
+ScreeningBenefit = UnscreenedRisk - ScreenedRisk
+```
 
-## Stage 1: Synthetic Population Generation (IPF)
+### Stage 4: Medicaid Policy Simulation & Economic Impact (`medicaid_policy_simulator.py` + `colon_cancer_economics_model.py`)
 
-### Goal
+**Applies policy scenarios that change Medicaid coverage**, then:
+1. Recomputes screening status after coverage changes using `ScreeningCalculator`
+2. Calculates expected healthcare costs using `ColonCancerEconomicsModel`
+3. Quantifies the **incremental treatment costs** due to missed screening
 
-Create a synthetic population of individuals (agents) such that:
+**Key capabilities:**
+- CSV-driven policy definitions (no hard-coded scenarios)
+- Medicaid inference from income and insurance status
+- Screening recalculation after policy changes
+- **Economic impact analysis:** Shows both total cost changes AND the specific cost of missed screening
 
-- Aggregate counts by **Age**, **Gender**, and **Race/Ethnicity** match the ACS marginals for each tract.
-- Joint distributions of **Income**, **Education**, and **Health Insurance** are realistic and consistent with those observed in Census-based microdata.
+---
 
+## Workflow
 
-### Method
-
-The model uses **Iterative Proportional Fitting (IPF)** and sampling to construct individuals who jointly satisfy:
-
-- Tract-level ACS marginals from `demographics.csv`.
-- Cross-variable relationships embedded in `ipf-joint-distributions.csv`.
-
-
-### Data Sources and Construction of `ipf-joint-distributions.csv`
-
-The file `ipf-joint-distributions.csv` supplies conditional distributions such as:
-
-- $P(\text{Income} \mid \text{Race})$
-- $P(\text{Education} \mid \text{Race})$
-- $P(\text{Insurance} \mid \text{Race}, \text{AgeGroup})$
-
-These joint distributions should be constructed from **Census-based data**, not BRFSS:
-
-- **Recommended primary source:**
-**ACS Public Use Microdata Sample (PUMS)** for Virginia, or restricted to PUMAs that approximate the **southeast Virginia region** (Richmond + Hampton Roads). From PUMS, one can directly estimate:
-    - Empirical $P(\text{Income} \mid \text{Race})$ by counting respondents by race and income bracket.
-    - Empirical $P(\text{Education} \mid \text{Race})$.
-    - Empirical $P(\text{Health Insurance} \mid \text{Race}, \text{AgeGroup})$ (or at least by age and insurance).
-- **Aligning with tract-level ACS:**
-    - The **marginals** (e.g., total by race, total by age, total by income) come from tract-level ACS summary tables in `demographics.csv`.
-    - The **conditional relationships** (how income, education, and insurance relate to race and age) are taken from PUMS at the PUMA/region level and written into `ipf-joint-distributions.csv`.
-    - The IPF procedure then iteratively adjusts sampled individuals to match the tract marginals while preserving these census-derived relationships as much as possible.
-
-In other words:
-
-- **`demographics.csv`** ⇒ “How many people of each type live in each tract?”
-- **`ipf-joint-distributions.csv` (from ACS PUMS)** ⇒ “Given race and age, how likely is each income, education, and insurance status in this region?”
-
-This keeps **structural sociodemographic relationships grounded in Census data**, which is appropriate for Stage 1.
-
-### Implementation Notes
-
-- The code defines lists for:
-    - `self.age_groups`
-    - `self.races`
-    - `self.income_brackets`
-    - `self.education_levels`
-- For each tract, the model:
-
-1. Computes age×gender and race marginals from `demographics.csv`.
-2. Reads conditional distributions from that tract’s row in `ipf-joint-distributions.csv`.
-3. Samples individual agents via an IPF-inspired procedure until the synthetic distribution matches the marginals within a tolerance.
-
-**Academic foundation:**
-
-- Beckman, R. J., Baggerly, K. A., \& McKay, M. D. (1996). *Creating synthetic baseline populations*. Transportation Research Part A.
-- Deming, W. E., \& Stephan, F. F. (1940). *On a least squares adjustment of a sampled frequency table when the expected marginal totals are known*. Annals of Mathematical Statistics.
-
-***
-
-## Stage 2: Screening Status Assignment (BRFSS-Based, via `screening_calculator.py`)
-
-### Goal
-
-Assign each individual a colon cancer screening status (`Screened` or `Not_Screened`) in a way that:
-
-- Matches tract-level CRC screening prevalence from `colon-rates.csv`.
-- Reflects subgroup differences in screening uptake by Age, Race/Ethnicity, and Insurance, as observed in **BRFSS** for the **southeast Virginia region**.
-
-
-### Data Inputs
-
-- **`colon-rates.csv`**
-Contains:
-    - `GEOID`
-    - `COLON_SCREEN_RATE` (e.g., percentage up-to-date with CRC screening)
-- **`screening-joint-distributions.csv`**
-Contains adjustment columns such as:
-    - `45to49_Screening_Adjustment`, `50to54_Screening_Adjustment`, …
-    - `Insured_Screening_Adjustment`, `Uninsured_Screening_Adjustment`
-    - `White_NonHispanic_Screening_Adjustment`, `Black_NonHispanic_Screening_Adjustment`, etc.
-
-These screening inputs are used by a shared module, `screening_calculator.py`, which is imported by both `model.py` and `medicaid_policy_simulator.py`.
-
-### Source of Screening Joint Distributions
-
-Here, **BRFSS is the right source**:
-
-- Use BRFSS microdata for **adult residents in southeast Virginia** (Richmond + Hampton Roads).
-- From BRFSS, estimate **relative** screening propensities:
-    - By Age group (45–49, 50–54, …).
-    - By Race/Ethnicity.
-    - By Insurance status.
-
-These relative effects become multiplicative **adjustment factors** in `screening-joint-distributions.csv`. For example:
-
-- If BRFSS shows that:
-    - Insured individuals have 1.3× the odds of being screened compared to uninsured.
-    - Adults 65–75 have 1.5× the odds compared to 45–49-year-olds.
-    - A particular race group has 0.8× the odds compared to White non-Hispanic.
-- Then these factors can be encoded as:
-    - `Insured_Screening_Adjustment = 1.3`
-    - `Uninsured_Screening_Adjustment = 1.0` (reference)
-    - `65to69_Screening_Adjustment = 1.5`
-    - `45to49_Screening_Adjustment = 1.0` (reference)
-    - etc.
-
-
-### Implementation
-
-All screening logic is encapsulated in the `ScreeningCalculator` class in `screening_calculator.py`:
-
-1. Determine tract-level baseline $p_{\text{tract}}$ from `colon-rates.csv`.
-2. Look up age, race, and insurance adjustment factors from `screening-joint-distributions.csv`.
-3. Multiply:
-
-$$
-p_{\text{indiv}} = \text{clip}_{[0.01,0.99]}\left(p_{\text{tract}} \times \text{AgeAdj} \times \text{RaceAdj} \times \text{InsuranceAdj}\right)
-$$
-4. Draw a Bernoulli random variable with probability $p_{\text{indiv}}$ to assign `Screened` / `Not_Screened`.
-5. Record:
-    - `Age_Eligibility` (whether in the 45–75 screening age range)
-    - `Colon_Screening_Probability`
-    - `Colon_Cancer_Screening_Status`
-
-This cleanly separates:
-
-- **Level 2 (tract)** information from PLACES/other sources.
-- **Level 1 (individual)** relative effects estimated from **BRFSS regional survey data**.
-
-**Academic foundation:**
-
-- Zhang, X., Holt, J. B., et al. (2014). *Multilevel regression and poststratification for small-area estimation of population health outcomes*. American Journal of Epidemiology.
-- CRC screening disparity studies using BRFSS data to quantify differences by race, income, education, and insurance.
-
-***
-
-## Stage 3: CCRAT Risk Assessment (CSV-Driven)
-
-### Goal
-
-Estimate each individual’s 5‑year CRC risk under:
-
-- No screening (`Unscreened_Risk`)
-- Given screening effectiveness (`Screened_Risk`)
-
-and quantify `Screening_Benefit`.
-
-### Data Source
-
-- **`ccrat-parameters.csv`**
-Structured with:
-    - `Parameter_Category`: e.g., `age_baseline_risk`, `gender_multiplier`, `race_multiplier`, `income_multiplier`, `education_multiplier`, `screening_effectiveness`.
-    - `Parameter_Name`: e.g., `risk_45to49`, `male`, `white`, `under20k`, `bachelorplus`.
-    - `Parameter_Value`: numeric.
-
-
-### Implementation
-
-- Age, gender, race, income, and education are mapped to CCRAT-compatible categories.
-- Risk is computed as:
-    - $\text{Unscreened\_Risk} = \text{BaselineRisk(age)} \times \text{GenderMult} \times \text{RaceMult} \times \text{IncomeMult} \times \text{EducationMult}$
-    - $\text{Screened\_Risk} = \text{Unscreened\_Risk} \times (1 - \text{ScreeningEffectiveness})$
-    - `Screening_Benefit` = `Unscreened_Risk` − `Screened_Risk`.
-- Risk category is assigned based on thresholds (e.g., Low/Medium/High).
-
-**Academic foundation:**
-
-- Freedman, A. N., et al. (2009). *Colorectal cancer risk prediction tool for white men and women without known susceptibility*. Journal of Clinical Oncology.
-- General literature on CRC risk models and absolute risk estimation.
-
-***
-
-## Input Arguments and Execution (model.py)
-
-Run the main CRC pipeline as:
+### Step 1: Run the Synthetic Population Pipeline
 
 ```bash
 python3 model.py \
-    --demographics data/demographics.csv \
-    --ipf-joint-dist data/ipf-joint-distributions.csv \
-    --screening-joint-dist data/screening-joint-distributions.csv \
-    --colon-rates data/colon-rates.csv \
-    --ccrat-parameters data/ccrat-parameters.csv \
-    --output output/synthetic_population.csv \
-    --scaling-factor 100
+  --demographics data/demographics.csv \
+  --ipf-joint-dist data/ipf-joint-distributions.csv \
+  --screening-joint-dist data/screening-joint-distributions.csv \
+  --colon-rates data/colon-rates.csv \
+  --ccrat-parameters data/ccrat-parameters.csv \
+  --output output/synthetic_population.csv \
+  --scaling-factor 100
 ```
 
-Arguments:
+**Output:** `synthetic_population.csv` with columns:
+- Demographic/SDOH: `Tract_GEOID`, `Age_Group`, `Race_Ethnicity`, `Income_Bracket`, `Education_Level`, `Health_Insurance_Status`
+- Screening: `Age_Eligibility`, `Colon_Screening_Probability`, `Colon_Cancer_Screening_Status`
+- CRC Risk: `Unscreened_Risk`, `Screened_Risk`, `Screening_Benefit`, `Risk_Category`
 
-- `--demographics`: ACS tract-level marginals (Census-based).
-- `--ipf-joint-dist`: Joint distributions estimated from ACS PUMS or equivalent Census microdata for Virginia/southeast Virginia.
-- `--screening-joint-dist`: BRFSS-derived relative screening adjustment factors for the southeast Virginia region (consumed via `screening_calculator.py`).
-- `--colon-rates`: Tract-level baseline CRC screening rates (also consumed via `screening_calculator.py`).
-- `--ccrat-parameters`: CSV configuration for CCRAT-style risk parameters.
-- `--output`: Output CSV path for the synthetic population.
-- `--scaling-factor`: Controls the synthetic sample size relative to real population.
+---
 
-***
-
-## Output
-
-The model writes a CSV of synthetic individuals with:
-
-- Tract identifiers and names.
-- Demographic and SDOH attributes consistent with ACS marginals and Census-based joint distributions.
-- Screening status probabilities and realized screening outcomes, consistent with tract rates and BRFSS-derived disparities.
-- CCRAT-style unscreened and screened risk, plus screening benefit and risk category.
-
-This separation of data sources:
-
-- **Census/ACS/PUMS → `demographics.csv` and `ipf-joint-distributions.csv`** for structural sociodemographics.
-- **BRFSS → `screening-joint-distributions.csv`** for screening behavior patterns.
-- **Risk literature → `ccrat-parameters.csv`** for disease risk modeling.
-
-***
-
-## Medicaid Policy Simulation (CSV-Driven + Screening Recalculation)
-
-### Goal
-
-The Medicaid policy simulation extends the synthetic population generated by `model.py` to explore how different Medicaid coverage policies affect insurance status, coverage loss, and colon cancer screening in the same synthetic population.
-
-This is implemented in `medicaid_policy_simulator.py`, which:
-
-- Reads the **synthetic population CSV** produced by `model.py`.
-- Reads the **same screening configuration files** used in Stage 2 (`screening-joint-distributions.csv`, `colon-rates.csv`).
-- Infers which individuals are likely covered by Medicaid based on income and insurance.
-- Applies one or more **policy scenarios** defined in external CSV files.
-- Recomputes colon cancer screening status after each policy using `screening_calculator.py` and the updated insurance status.
-- Outputs updated insurance and screening status, plus a comparison summary across scenarios.
-
-Policies are **not hard-coded** in Python; instead, they are defined in configuration CSV files, making the simulation fully data-driven and easily extensible.
-
-***
-
-### Inputs and Dependencies
-
-The Medicaid simulator expects:
-
-From the **synthetic population CSV** (output of `model.py`):
-
-- `Tract_GEOID`
-- `Income_Bracket` (e.g., `Less10k`, `20to25k`, `75to100k`, `100to125k`, …)
-- `Health_Insurance_Status` (`Insured` or `Uninsured`)
-- `Age_Group` (e.g., `45to49`, `50to54`, `65to69`, `70to74`)
-- `Race_Ethnicity` (e.g., `White_NonHispanic`, `Black_NonHispanic`, `Hispanic_Latino`, `Asian_NonHispanic`, etc.)
-
-From **screening configuration** (same as Stage 2 of `model.py`):
-
-- `screening-joint-distributions.csv`: BRFSS-derived screening adjustment factors.
-- `colon-rates.csv`: Tract-level baseline colon screening rates.
-
-From **policy configuration**:
-
-Each policy scenario is defined in its own CSV file with the following columns:
-
-- `Policy_Name`: Human-readable name (e.g., `Income_Tightening`).
-- `Target_Field`: Field to check (usually `Medicaid_Status`).
-- `Condition`: Comparison operator (typically `==`).
-- `Value`: Comparison value (e.g., `True`).
-- `Action`: Named condition handler (see below).
-- `Coverage_Change`: Resulting coverage (`Uninsured`, `Keep`, `No_Change`, etc.).
-- `Note`: Text explanation of the rule.
-
-Multiple rows in a single policy CSV are **OR-ed together**: if an individual matches any row’s combined condition, the first matching rule applies.
-
-***
-
-### Medicaid Inference Logic
-
-Before applying any policy, the simulator infers which individuals are likely on Medicaid:
-
-- If `Health_Insurance_Status == 'Uninsured'` → not Medicaid.
-- If `Health_Insurance_Status == 'Insured'` and **estimated income < ~138% FPL** → likely Medicaid.
-- Otherwise → likely privately insured or other coverage.
-
-To do this, the simulator:
-
-1. Maps `Income_Bracket` from `model.py` to coarser policy brackets:
-    - `Less10k` → `Less10k`
-    - `10to15k`, `15to20k`, `20to25k` → `10to25k`
-    - `25to30k`, `30to35k`, `35to40k`, `40to45k`, `45to50k` → `25to50k`
-    - `50to60k`, `60to75k` → `50to75k`
-    - `75to100k` → `75to100k`
-    - `100to125k`, `125to150k`, `150to200k`, `200kplus` → `100kplus`
-2. Assigns midpoint income values for each policy bracket (e.g., `10to25k` → \$17,500).
-3. Classifies low-income insured individuals as likely Medicaid enrollees.
-
-The inferred flag is stored as `Medicaid_Status` (boolean).
-
-***
-
-### Named Policy Actions
-
-Policies reference a small set of **named actions** that encode common Medicaid policy effects:
-
-- `Income_Between_100_138_FPL`
-    - Targets individuals with estimated income between roughly \$25,700 and \$35,600 (100–138% FPL).
-    - Used for policies that **tighten eligibility** from 138% to 100% FPL.
-- `Age_18_55_Random_<rate>`
-    - Targets adults aged 18–55, with a random disenrollment rate `rate` (e.g., `0.08` for 8%).
-    - Used to simulate **administrative churning** and work requirements (periodic redeterminations and paperwork losses).
-- `Immigrant_Proxy`
-    - Uses `Race_Ethnicity` as an imperfect proxy for immigrant status (e.g., higher probabilities for Hispanic/Latino and Asian groups).
-    - Used to simulate **immigrant coverage restrictions**, where a fraction of low-income enrollees from specific race/ethnicity groups lose coverage.
-
-The engine combines:
-
-- `Target_Field` / `Condition` / `Value` (e.g., `Medicaid_Status == True`)
-- AND the chosen `Action` mask (income range, age+random, immigrant proxy)
-
-to decide which individuals are affected.
-
-***
-
-### Example Policy CSVs
-
-**1. Income Threshold Tightening (100% FPL)**
-
-`policies/income_tightening.csv`:
-
-```csv
-Policy_Name,Target_Field,Condition,Value,Action,Coverage_Change,Note
-Income_Tightening,Medicaid_Status,==,True,Income_Between_100_138_FPL,Uninsured,Income exceeds 100% FPL threshold (100–138% FPL band)
-```
-
-**2. Administrative Churning + Work Requirements**
-
-`policies/admin_churn.csv`:
-
-```csv
-Policy_Name,Target_Field,Condition,Value,Action,Coverage_Change,Note
-Admin_Churn,Medicaid_Status,==,True,Age_18_55_Random_0.08,Uninsured,Administrative disenrollment (6-mo redetermination, work requirements)
-```
-
-**3. Immigrant Coverage Restrictions**
-
-`policies/immigrant_restrict.csv`:
-
-```csv
-Policy_Name,Target_Field,Condition,Value,Action,Coverage_Change,Note
-Immigrant_Restrictions,Medicaid_Status,==,True,Immigrant_Proxy,Uninsured,Immigrant coverage restriction based on race/ethnicity proxy
-```
-
-
-***
-
-### Running the Full Pipeline: `model.py` + Medicaid Simulator
-
-1. **Run the CRC synthetic population pipeline:**
-```bash
-python3 model.py \
-    --demographics data/demographics.csv \
-    --ipf-joint-dist data/ipf-joint-distributions.csv \
-    --screening-joint-dist data/screening-joint-distributions.csv \
-    --colon-rates data/colon-rates.csv \
-    --ccrat-parameters data/ccrat-parameters.csv \
-    --output output/synthetic_population.csv \
-    --scaling-factor 100
-```
-
-This produces `output/synthetic_population.csv` with:
-
-- Demographics and SDOH (Age_Group, Race_Ethnicity, Income_Bracket, Education_Level, Health_Insurance_Status).
-- Screening status and probability.
-- CCRAT risk metrics.
-
-2. **Run the Medicaid policy simulator on the same population.**
-
-With policy changes:
+### Step 2: Run Medicaid Policy Simulation with Economic Analysis
 
 ```bash
 python3 medicaid_policy_simulator.py \
   --population output/synthetic_population.csv \
   --screening-joint-dist data/screening-joint-distributions.csv \
   --colon-rates data/colon-rates.csv \
+  --economics-params data/colon_cancer_economics_parameters.csv \
   --policy policies/income_tightening.csv \
   --policy policies/admin_churn.csv \
-  --policy policies/immigrant_restrict.csv \
   --output-dir output
 ```
 
-Baseline only (no policies):
-
+**Optional:** Run baseline only (no policies):
 ```bash
 python3 medicaid_policy_simulator.py \
   --population output/synthetic_population.csv \
   --screening-joint-dist data/screening-joint-distributions.csv \
   --colon-rates data/colon-rates.csv \
+  --economics-params data/colon_cancer_economics_parameters.csv \
   --output-dir output
 ```
 
-The simulator will:
+**Outputs:**
+- `population_medicaid_Baseline.csv` — Baseline scenario with costs
+- `population_medicaid_{PolicyName}.csv` — Each policy scenario with costs
+- `policy_comparison_summary.csv` — Coverage metrics by scenario
+- `economic_impact_summary.csv` — Cost breakdown by scenario
+- `{PolicyName}_missed_screening_costs.csv` — Detailed costs for affected individuals
 
-- Infer `Medicaid_Status` for each individual.
-- Apply the baseline (no-change) scenario.
-- Apply each policy CSV in turn (if provided).
-- Recompute screening after each scenario using the updated coverage (`Coverage_Status_After_Policy`) and the shared `ScreeningCalculator`.
-- Save one CSV per scenario:
-    - `output/population_medicaid_Baseline.csv`
-    - `output/population_medicaid_Income_Tightening.csv`
-    - `output/population_medicaid_Admin_Churn.csv`
-    - `output/population_medicaid_Immigrant_Restrictions.csv`
-- Generate a summary table:
-    - `output/policy_comparison_summary.csv`
+---
 
-The summary includes, for each scenario:
+## Module Details
 
-- Total population.
-- Number and percentage insured vs uninsured.
-- Estimated number of Medicaid enrollees.
-- Number and percentage who lose coverage due to the policy.
+### `model.py` — Synthetic Population Generator
 
+**Key Classes:**
+- `SyntheticPopulationBuilder` — Generates population via IPF
+
+**Key Methods:**
+- `ipf_sampling()` — Iteratively adjusts sampled individuals to match tract marginals
+- `assign_ccrat_risk()` — Calculates CCRAT-style risk using risk parameters CSV
+
+**Inputs:** 5 CSV files (demographics, IPF distributions, screening rates, screening adjustments, CCRAT parameters)
+
+**Output:** CSV with 35+ columns including demographics, screening status, and CRC risk
+
+---
+
+### `screening_calculator.py` — Shared Screening Logic
+
+**Purpose:** Encapsulates all screening status assignment logic so both `model.py` and `medicaid_policy_simulator.py` use identical methods.
+
+**Key Class:**
+- `ScreeningCalculator` — Handles screening probability calculation and assignment
+
+**Key Method:**
+- `assign_screening_to_population()` — Assigns screening status based on tract rates, age/race/insurance adjustments, and insurance column
+
+**Usage:**
+```python
+from screening_calculator import ScreeningCalculator
+
+calculator = ScreeningCalculator(
+    screening_joint_distributions_csv='data/screening-joint-distributions.csv',
+    colon_rates_csv='data/colon-rates.csv'
+)
+
+df_with_screening = calculator.assign_screening_to_population(
+    df,
+    insurance_column='Coverage_Status_After_Policy'  # Can be updated after policy changes
+)
+```
+
+---
+
+### `medicaid_policy_simulator.py` — Policy Simulator with Screening Recalculation
+
+**Purpose:** Applies Medicaid policy changes and recomputes screening + costs.
+
+**Key Classes:**
+- `MedicaidPolicySimulator` — Manages policy application, screening recalculation, and economic analysis
+
+**Key Methods:**
+- `infer_medicaid_status()` — Classifies individuals as likely Medicaid based on income/insurance
+- `apply_policy_from_config()` — Applies CSV-defined policy rules using named actions
+- `apply_baseline()` — No-change scenario (138% FPL baseline)
+
+**Named Actions (CSV-driven):**
+
+1. **`Income_Between_100_138_FPL`** — Targets income in 100–138% FPL range
+   - Usage: Income threshold tightening from 138% to 100% FPL
+
+2. **`Age_18_55_Random_<rate>`** — Random selection of adults 18–55
+   - Usage: Administrative churn, work requirements (e.g., `Age_18_55_Random_0.08` = 8% churn rate)
+
+3. **`Immigrant_Proxy`** — Race/ethnicity-based proxy for immigrant status
+   - Usage: Immigrant coverage restrictions (e.g., Hispanic_Latino = 35% probability)
+
+**Example Policy CSV** (`policies/income_tightening.csv`):
+```csv
+Policy_Name,Target_Field,Condition,Value,Action,Coverage_Change,Note
+Income Tightening,Medicaid_Status,,True,Income_Between_100_138_FPL,Uninsured,Lose coverage if income 100-138% FPL
+```
+
+**Policy Application Logic:**
+1. Multiple rows in a policy CSV are **OR-ed together**
+2. If individual matches ANY row's combined condition, the **first matching rule applies**
+3. Combines `Target_Field` == `Value` AND the `Action` mask
+
+---
+
+### `colon_cancer_economics_model.py` — Healthcare Cost Calculator
+
+**Purpose:** Calculates expected treatment costs and identifies the specific costs of missed screening.
+
+**Key Classes:**
+- `ColonCancerEconomicsModel` — Loads parameters from CSV and computes costs
+
+**Key Methods:**
+- `calculate_individual_cost()` — Expected lifetime cost based on risk, screening status, and stage distribution
+- `apply_costs_to_population()` — Applies cost calculation to entire population
+- `generate_cost_report()` — Summary statistics (total, average, by screening status)
+- `generate_scenario_comparison()` — **KEY:** Compares baseline vs. policy, isolating treatment cost increase from missed screening
+
+**Parameters (CSV-driven):** All loaded from `colon_cancer_economics_parameters.csv`
+- Treatment costs by stage (Stage I–IV)
+- Screening procedure cost ($1,500)
+- Stage distributions (screened vs. unscreened)
+- Discount rate (3%), time horizon (10 years)
+- Survival multipliers by stage
+
+**Cost Calculation:**
+```
+Treatment_Cost = Cancer_Risk × Σ(Stage_Probability × Stage_Cost × Survival_Multiplier)
+Screening_Cost = $1,500 (if screened and eligible)
+Screening_Benefit = Risk_Reduction × Advanced_Cancer_Cost × Reduction_Factor
+Total_Cost = Treatment_Cost + Screening_Cost - Screening_Benefit
+```
+
+**Scenario Comparison (the critical metric):**
+- **Treatment Cost Increase** = Additional cancer treatment costs from missed screening
+  - Positive = more advanced cancers, higher treatment burden
+  - This is the **real societal cost** of losing screening coverage
+
+---
+
+## CSV Configuration Files
+
+### Input Data Files
+
+| File | Purpose | Key Columns |
+|------|---------|-------------|
+| `demographics.csv` | ACS tract-level population marginals | Tract_GEOID, Age_Group, Gender, Race_Ethnicity, count |
+| `ipf-joint-distributions.csv` | Census-based conditional distributions | Tract_GEOID, Race_Ethnicity, Income_Bracket, P(Income\|Race), ... |
+| `screening-joint-distributions.csv` | BRFSS-derived screening adjustment factors | Age_Group, Race_Ethnicity, Insurance, ScreeningAdjustment |
+| `colon-rates.csv` | Tract-level baseline CRC screening rates | Tract_GEOID, Colon_Screening_Rate |
+| `ccrat-parameters.csv` | CCRAT-style risk parameters | Parameter_Type, Parameter_Name, Parameter_Value |
+| `colon_cancer_economics_parameters.csv` | Healthcare costs and economic parameters | Parameter_Type, Parameter_Name, Parameter_Value |
+
+### Policy Configuration Files
+
+Each policy scenario is defined in its own CSV:
+
+| Column | Purpose | Example |
+|--------|---------|---------|
+| `Policy_Name` | Human-readable policy name | Income Tightening |
+| `Target_Field` | Field to check | Medicaid_Status |
+| `Condition` | Comparison operator | == |
+| `Value` | Target value | True |
+| `Action` | Named action handler | Income_Between_100_138_FPL |
+| `Coverage_Change` | Result | Uninsured |
+| `Note` | Explanation | Income exceeds 100 FPL threshold |
+
+**Example:**
+```csv
+Policy_Name,Target_Field,Condition,Value,Action,Coverage_Change,Note
+Income Tightening,Medicaid_Status,,True,Income_Between_100_138_FPL,Uninsured,Income 100-138% FPL loses coverage
+Admin Churn,Medicaid_Status,,True,Age_18_55_Random_0.08,Uninsured,Administrative disenrollment 8%
+Immigrant Restrictions,Medicaid_Status,,True,Immigrant_Proxy,Uninsured,Immigrant proxy-based restrictions
+```
+
+---
+
+## Output & Interpretation
+
+### Policy Comparison Summary (`policy_comparison_summary.csv`)
+
+| Scenario | Total Population | Insured | Uninsured | Coverage Loss | % Loss |
+|----------|-----------------|---------|-----------|---------------|--------|
+| Baseline | 17,264 | 15,869 | 1,395 | 0 | 0.0% |
+| Income Tightening | 17,264 | 15,869 | 1,395 | 1,395 | 8.1% |
+| Admin Churn | 17,264 | 15,715 | 1,549 | 1,549 | 9.0% |
+
+### Economic Impact Summary (`economic_impact_summary.csv`)
+
+Shows total and per-capita costs by scenario, including screening-related metrics.
+
+### Scenario-Specific Reports (Console Output)
+
+For each policy, the simulator displays:
+
+```
+Medicaid Coverage Losses:
+  • Individuals who lost coverage: 1,549 (8.97% of population)
+  • Also lost screening: 11
+
+Economic Impact (Lost Screening Coverage):
+  • Affected individuals: 11
+  • ADDITIONAL TREATMENT COSTS: $12,500
+  • Avg treatment cost increase per person: $1,136
+  → This represents HIGHER cancer treatment costs because
+    unscreened individuals are diagnosed at later stages
+
+Accounting Breakdown:
+  • Treatment cost increase (late-stage cancers): +$12,500
+  • Screening procedure cost saved: -$16,500
+  • Net accounting impact: -$4,000
+  → Policy appears 'cheaper' by $4,000 due to avoided screening
+  → BUT society pays $12,500 MORE treating advanced cancers
+```
+
+---
+
+## Key Design Features
+
+Fully CSV-Driven
+
+- No hard-coded parameters: All behavioral, screening, and cost data live in CSV files
+- No hard-coded policies: Policies are defined in configuration CSVs, making them easily extensible
+- Easy updates: Change any input CSV without modifying Python code
+
+Modular & Reusable
+
+- `ScreeningCalculator` is shared between `model.py` and `medicaid_policy_simulator.py`
+- Consistent screening logic across the pipeline
+- Economic model operates independently of population generation
+
+Evidence-Based
+
+- Stage 1: Census ACS + PUMS data for demographics
+- Stage 2: BRFSS data for screening behavior and disparities
+- Stage 3: CCRAT framework for CRC risk estimation
+- Stage 4: Healthcare economics literature for treatment costs
+
+Clear Economic Messaging
+
+- Treatment Cost Increase = The **real cost** of missed screening (not just the screening procedure cost)
+- Transparent accounting showing why a policy might appear "cheaper" (avoids screening) while actually being more expensive (more advanced cancers)
+
+---
+
+## Data Sources & Evidence Base
+
+### Stage 1: Demographics & Social Determinants of Health
+
+- **American Community Survey (ACS):** Census Bureau's annual sociodemographic survey at tract level (5-year estimates recommended)
+- **ACS Public Use Microdata Sample (PUMS):** Individual-level microdata for estimating conditional distributions (P(Income|Race), P(Education|Race), P(Insurance|Race,Age))
+  - Source: [Census Bureau PUMS](https://www.census.gov/microdata/pums/about.html)
+
+### Stage 2: Screening Behavior & Disparities
+
+- **Behavioral Risk Factor Surveillance System (BRFSS):** CDC's annual population-based survey of health behaviors
+  - CRC screening rates by age, race/ethnicity, insurance status
+  - State and regional estimates available
+  - Source: [CDC BRFSS](https://www.cdc.gov/brfss/)
+- **PLACES Project:** CDC's Population-Level Analysis and Community Estimates
+  - Tract-level estimates of clinical preventive services, including colorectal cancer screening
+  - Source: [CDC PLACES](https://www.cdc.gov/places/)
+
+### Stage 3: Colorectal Cancer Risk Estimation
+
+- **CCRAT (Colorectal Cancer Risk Assessment Tool):** National Cancer Institute framework for stratifying CRC risk
+  - Freedman, A. N., et al. (2009). "Colorectal cancer risk prediction tool for white men and women without known susceptibility." *Journal of Clinical Oncology*, 27(5), 686-693.
+  - Baseline risks by age, gender, race/ethnicity
+  - Risk multipliers for demographic and behavioral factors
+  - Source: [NCI CCRAT](https://cancer.nih.gov/prevention-research/clinical-tools/ccrat)
+
+### Stage 4: Healthcare Economics & Treatment Costs
+
+Treatment costs by cancer stage are derived from published health economics literature:
+
+1. **Direct Medical Costs by Cancer Stage:**
+   - Mariotto, A. B., Yabroff, K. R., Shao, Y., Feuer, E. J., & Brown, M. L. (2011). "Projections of the cost of cancer care in the United States: 2010–2020." *Journal of the National Cancer Institute*, 103(2), 117-128.
+     - Provides stage-specific treatment costs (Stage I–IV) in 2010 dollars
+     - Accounts for initial treatment, continuing care, and terminal care phases
+   
+   - Tangka, F. K. A., Trogdon, J. G., Richardson, L. C., Xia, L. Z., & Sabatino, S. A. (2010). "Cancer treatment cost in the United States: A systematic review of studies published in peer-reviewed journals." *Journal of Oncology Practice*, 6(6), 313-321.
+     - Systematic review of treatment cost literature
+     - Stage-stratified costs for colorectal cancer specifically
+
+2. **Screening Costs:**
+   - Screening colonoscopy cost approximately $1,000–$2,000 in U.S. healthcare settings (varies by insurance type and facility)
+   - Based on: American Gastroenterological Association (AGA) guidelines and CMS Medicare Fee Schedule (CPT codes 45378–45398 for colonoscopy)
+   - Source: [CMS.gov Physician Fee Schedule](https://www.cms.gov/medicare/payment-systems/physician-fee-schedule)
+
+3. **Stage Distribution & Prognosis:**
+   - Siegel, R. L., Miller, K. D., & Jemal, A. (2023). "Cancer statistics, 2023." *CA: A Cancer Journal for Clinicians*, 73(1), 17-48.
+     - Distribution of cancers by stage at diagnosis
+     - Screened vs. unscreened populations show significantly different stage distributions
+   
+   - Winawer, S. J., Zauber, A. G., Ho, M. N., et al. (1993). "Prevention of colorectal cancer by colonoscopic polypectomy." *New England Journal of Medicine*, 329(27), 1977-1981.
+     - Foundational study demonstrating screening effectiveness
+     - Shows earlier-stage diagnosis in screened populations
+
+4. **Cost-Effectiveness & Economic Burden:**
+   - Sequist, T. D., Wee, C. C., & Prichett, L. (2010). "Preventive care in the United States: Racial/ethnic differences in receipt." *Journal of General Internal Medicine*, 25(2), 147-154.
+     - Documents healthcare cost disparities by race/ethnicity and insurance status
+   
+   - Thorpe, K. E., Florence, C. S., & Joski, P. (2004). "Which medical conditions account for the rise in health spending?" *Health Affairs*, W4-437–W4-445.
+     - Spending patterns for chronic diseases and cancer treatment
+
+5. **Medicaid-Specific Costs:**
+   - Trogdon, J. G., Finkelstein, E. A., Tangka, F. K., Orenstein, D., & Richardson, L. C. (2008). "State-level estimates of cancer screening, treatment, and management costs." *Cancer Epidemiology, Biomarkers & Prevention*, 17(9), 2540-2545.
+     - Medicaid-specific treatment cost estimates
+     - Comparison with private insurance costs
+
+6. **Survival Multipliers & Long-Term Costs:**
+   - Brown, M. L., Riley, G. F., Schussler, N., & Etzioni, R. (2002). "Estimating health care costs related to cancer treatment from SEER-Medicare data." *Medical Care*, 40(8 Suppl), IV-104–IV-117.
+     - Lifetime costs stratified by cancer stage and age
+     - Survival probability multipliers for Stage I–IV colorectal cancer
+
+---
+
+## Academic Foundation
+
+### Synthetic Population Generation (IPF)
+- Beckman, R. J., Baggerly, K. A., & McKay, M. D. (1996). "Creating synthetic baseline populations." *Transportation Research Part A*, 30(6), 415-429.
+- Deming, W. E., & Stephan, F. F. (1940). "On a least squares adjustment of a sampled frequency table when the expected marginal totals are known." *Annals of Mathematical Statistics*, 11(4), 427-444.
+
+### Screening Assignment & Disparities
+- Zhang, X., Holt, J. B., Lu, H., et al. (2015). "Multilevel regression and poststratification for small-area estimation of population health outcomes." *American Journal of Epidemiology*, 181(11), 899-907.
+- Dominitz, J. A., Robertson, D. J., Ahnen, D. J., et al. (2021). "Colonoscopy vs. fecal immunochemical test in reducing mortality from colorectal cancer (CONFIRM): A prospective randomized trial." *American Journal of Gastroenterology*, 116(1), 93-102.
+
+### CRC Risk Estimation
+- Freedman, A. N., Slattery, M. L., Ballard-Barbash, R., et al. (2009). "Colorectal cancer risk prediction tool for white men and women without known susceptibility." *Journal of Clinical Oncology*, 27(5), 686-693.
+
+---
+
+## License & Attribution
+
+This pipeline integrates multiple public health data sources and methodologies. Appropriate attribution and data use agreements should be observed when using Census (ACS), BRFSS, PLACES, and other restricted-use datasets.
+
+---
+
+## Questions & Customization
+
+For questions or to customize the pipeline:
+1. Check the CSV configuration files—most behavior can be tuned without code changes
+2. Extend named actions in `medicaid_policy_simulator.py` for new policy types
+3. Modify stage distributions or cost parameters in the economic model CSV

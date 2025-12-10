@@ -1,0 +1,12 @@
+Usage Example:
+
+bash
+python3 medicaid_policy_simulator.py \
+  --population output/synthetic_population.csv \
+  --screening-joint-dist data/screening-joint-distributions.csv \
+  --colon-rates data/colon-rates.csv \
+  --economics-params data/colon_cancer_economics_parameters.csv \
+  --policy policies/income_tightening.csv \
+  --policy policies/admin_churn.csv \
+  --policy policies/immigrant_restrict.csv \
+  --output-dir output

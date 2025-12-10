@@ -1,0 +1,23 @@
+Parameter_Type,Parameter_Name,Parameter_Value,Unit,Description,Data_Source
+screening_procedures,colonoscopy_cost,1500.0,USD,Cost of colonoscopy screening procedure (2022 dollars),Healthcare Cost Institute
+screening_procedures,screening_frequency_years,10,years,Recommended screening interval for average-risk adults (per USPSTF),USPSTF Guidelines
+economic_parameters,time_horizon,10,years,Years to project forward for cost-benefit analysis,Standard health economics
+economic_parameters,discount_rate,0.03,decimal,Annual discount rate for future costs (3%),Standard health economics
+economic_parameters,advanced_stage_reduction,0.30,decimal,Proportional reduction in advanced stage probability from screening,Screening effectiveness literature
+treatment_costs,Stage_I,31063.0,USD,Treatment cost for Stage I colorectal cancer (2022 dollars),SEER-Medicare
+treatment_costs,Stage_II,39834.0,USD,Treatment cost for Stage II colorectal cancer (2022 dollars),SEER-Medicare
+treatment_costs,Stage_III,45000.0,USD,Treatment cost for Stage III colorectal cancer (2022 dollars),SEER-Medicare
+treatment_costs,Stage_IV,108599.0,USD,Treatment cost for Stage IV colorectal cancer (2022 dollars),SEER-Medicare
+survival_multipliers,Stage_I,1.0,multiplier,Treatment cost multiplier for Stage I (baseline),Clinical outcomes
+survival_multipliers,Stage_II,1.3,multiplier,Treatment cost multiplier for Stage II (30% higher due to intensity),Clinical outcomes
+survival_multipliers,Stage_III,1.6,multiplier,Treatment cost multiplier for Stage III (60% higher),Clinical outcomes
+survival_multipliers,Stage_IV,2.5,multiplier,Treatment cost multiplier for Stage IV (150% higher - palliative),Clinical outcomes
+stage_distributions_screened,Stage_I,0.42,probability,Probability of Stage I diagnosis if screened,CRC screening studies
+stage_distributions_screened,Stage_II,0.28,probability,Probability of Stage II diagnosis if screened,CRC screening studies
+stage_distributions_screened,Stage_III,0.21,probability,Probability of Stage III diagnosis if screened,CRC screening studies
+stage_distributions_screened,Stage_IV,0.09,probability,Probability of Stage IV diagnosis if screened,CRC screening studies
+stage_distributions_unscreened,Stage_I,0.18,probability,Probability of Stage I diagnosis if not screened,CRC screening studies
+stage_distributions_unscreened,Stage_II,0.22,probability,Probability of Stage II diagnosis if not screened,CRC screening studies
+stage_distributions_unscreened,Stage_III,0.35,probability,Probability of Stage III diagnosis if not screened,CRC screening studies
+stage_distributions_unscreened,Stage_IV,0.25,probability,Probability of Stage IV diagnosis if not screened,CRC screening studies
+default_risks,default_population_cancer_risk,0.005,decimal,Default cancer risk for individuals without risk data (0.5%),Population average

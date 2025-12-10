@@ -1,48 +1,22 @@
 """
-Medicaid Policy Simulation Engine (CSV-Driven + Screening Recalculation)
+Medicaid Policy Simulation Engine (CSV-Driven + Screening + Economic Analysis)
 
 A fully configurable Medicaid coverage policy simulator that reads policy rules
-from external CSV files instead of hard-coding policy logic.
+from external CSV files. After applying coverage changes:
+1. Recomputes colon cancer screening status using screening_calculator.py
+2. Calculates economic impact (costs) using colon_cancer_economics_model.py
 
-After applying coverage changes, it can recompute colon cancer screening
-status using the same screening logic as model.py (via ScreeningCalculator).
+All behavioral, screening, and cost parameters are CSV-driven.
 
-Policy CSV Schema:
-──────────────────
-Each policy is defined in a CSV file with columns:
-  - Policy_Name: Human-readable name/identifier
-  - Target_Field: Field to check (e.g., 'Medicaid_Status')
-  - Condition: Comparison operator (e.g., '==')
-  - Value: Target value (e.g., 'True')
-  - Action: Named condition handler (e.g., 'Income_Between_100_138_FPL')
-  - Coverage_Change: Resulting coverage status ('Uninsured', 'Keep', etc.)
-  - Note: Explanation of the policy rule
-
-Multiple rows in a single policy CSV are OR-ed: if an individual matches ANY
-row's combined condition, the first matching rule applies.
-
-Named Actions (built-in condition handlers):
-────────────────────────────────────────────
-  - Income_Between_100_138_FPL: Medicaid enrollees earning $25.7k–$35.6k
-  - Age_18_55_Random_<rate>: Working-age Medicaid enrollees, <rate> churn rate
-  - Immigrant_Proxy: Medicaid enrollees estimated as immigrants by race/ethnicity
-
-Example Usage:
-──────────────
+Example Usage with economics:
   python3 medicaid_policy_simulator.py \
     --population output/synthetic_population.csv \
     --screening-joint-dist data/screening-joint-distributions.csv \
     --colon-rates data/colon-rates.csv \
+    --economics-params data/colon_cancer_economics_parameters.csv \
     --policy policies/income_tightening.csv \
     --policy policies/admin_churn.csv \
     --output-dir output
-
-Input CSV from model.py should have columns:
-  - Tract_GEOID
-  - Age_Group (e.g., '45to49', '65to69')
-  - Race_Ethnicity (e.g., 'White_NonHispanic', 'Hispanic_Latino')
-  - Income_Bracket (e.g., 'Less10k', '20to25k', '75to100k')
-  - Health_Insurance_Status (e.g., 'Insured', 'Uninsured')
 """
 
 import pandas as pd
@@ -51,19 +25,16 @@ from typing import Dict, List, Tuple
 import logging
 
 from screening_calculator import ScreeningCalculator
+from colon_cancer_economics_model import ColonCancerEconomicsModel
 
 logger = logging.getLogger(__name__)
 
 
 class MedicaidPolicySimulator:
     """
-    CSV-driven Medicaid coverage policy simulator.
+    CSV-driven Medicaid coverage policy simulator with screening and economic analysis.
 
-    Infers likely Medicaid status from synthetic population data and applies
-    policy rules defined in external CSV files, then (optionally) recomputes
-    screening based on post-policy insurance status.
-
-    Designed to work with the synthetic population output from model.py.
+    Applies policy changes, recomputes screening, and calculates economic impact.
     """
 
     # 2025 Federal Poverty Line (48 states) – reference values
@@ -73,30 +44,29 @@ class MedicaidPolicySimulator:
 
     def __init__(self,
                  screening_joint_distributions_csv: str,
-                 colon_rates_csv: str):
-        """Initialize policy simulator + reusable screening calculator."""
-        logger.info("Initialized MedicaidPolicySimulator (CSV-driven)")
+                 colon_rates_csv: str,
+                 economics_parameters_csv: str = None):
+        """Initialize policy simulator with screening calculator and economics model."""
+        logger.info("Initialized MedicaidPolicySimulator (CSV-driven with economics)")
+        
         self.screening_calculator = ScreeningCalculator(
             screening_joint_distributions_csv=screening_joint_distributions_csv,
             colon_rates_csv=colon_rates_csv,
         )
+        
+        # Economics model is optional
+        self.economics_model = None
+        if economics_parameters_csv:
+            self.economics_model = ColonCancerEconomicsModel(
+                parameters_csv=economics_parameters_csv
+            )
 
     # ========================================================================
     # INCOME BRACKET MAPPING (model.py → policy brackets)
     # ========================================================================
 
     def map_model_income_to_policy_bracket(self, income_bracket: str) -> str:
-        """
-        Map model.py Income_Bracket (ACS-style) to coarser policy brackets.
-
-        model.py brackets:
-          Less10k, 10to15k, 15to20k, 20to25k, 25to30k, 30to35k,
-          35to40k, 40to45k, 45to50k, 50to60k, 60to75k,
-          75to100k, 100to125k, 125to150k, 150to200k, 200kplus
-
-        Policy brackets (coarse):
-          Less10k, 10to25k, 25to50k, 50to75k, 75to100k, 100kplus
-        """
+        """Map model.py Income_Bracket to coarser policy brackets."""
         if income_bracket in ['Less10k']:
             return 'Less10k'
         elif income_bracket in ['10to15k', '15to20k', '20to25k']:
@@ -109,7 +79,6 @@ class MedicaidPolicySimulator:
         elif income_bracket in ['75to100k']:
             return '75to100k'
         else:
-            # 100to125k, 125to150k, 150to200k, 200kplus and any unknown
             return '100kplus'
 
     # ========================================================================
@@ -117,14 +86,7 @@ class MedicaidPolicySimulator:
     # ========================================================================
 
     def infer_medicaid_status(self, row: pd.Series) -> Tuple[bool, str]:
-        """
-        Infer if individual likely has Medicaid based on demographics.
-
-        Logic:
-        - If Uninsured: not Medicaid
-        - If Insured + Low Income (< 138% FPL ≈ $20.7k): likely Medicaid
-        - If Insured + Higher Income: likely private/employer insurance
-        """
+        """Infer if individual likely has Medicaid based on demographics."""
         insurance_status = row['Health_Insurance_Status']
         income_bracket_model = row['Income_Bracket']
 
@@ -156,11 +118,7 @@ class MedicaidPolicySimulator:
     # ========================================================================
 
     def _cond_income_between_100_138_fpl(self, df: pd.DataFrame) -> pd.Series:
-        """
-        Mask for people with estimated income between 100% and 138% FPL.
-        Targets individuals earning $25.7k–$35.6k who would lose Medicaid
-        under a 100% FPL threshold reduction.
-        """
+        """Mask for people earning $25.7k–$35.6k (100–138% FPL)."""
         policy_brackets = df['Income_Bracket'].apply(self.map_model_income_to_policy_bracket)
         incomes = policy_brackets.apply(self.get_income_bracket_value)
         fpl_100 = 25700
@@ -168,12 +126,7 @@ class MedicaidPolicySimulator:
         return (incomes > fpl_100) & (incomes < fpl_138)
 
     def _cond_age_18_55_random(self, df: pd.DataFrame, rate: float) -> pd.Series:
-        """
-        Mask for working-age adults (18–55) with Bernoulli(rate) selection.
-
-        Used for modeling administrative churn: a fraction of eligible
-        working-age enrollees lose coverage due to paperwork/barriers.
-        """
+        """Mask for working-age adults (18–55) with Bernoulli(rate) selection."""
         ages = df['Age_Group'].apply(self._extract_age_from_group)
         base_mask = (ages >= 18) & (ages <= 55)
 
@@ -182,9 +135,7 @@ class MedicaidPolicySimulator:
         return base_mask & (r < rate)
 
     def _cond_immigrant_proxy(self, df: pd.DataFrame) -> pd.Series:
-        """
-        Mask for individuals estimated as immigrants using race/ethnicity proxy.
-        """
+        """Mask for individuals estimated as immigrants using race/ethnicity proxy."""
         immigrant_prob_by_race = {
             'Hispanic_Latino': 0.35,
             'Asian_NonHispanic': 0.55,
@@ -208,11 +159,7 @@ class MedicaidPolicySimulator:
     # ========================================================================
 
     def apply_policy_from_config(self, pop_df: pd.DataFrame, policy_df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Apply a Medicaid coverage policy defined in a CSV config file.
-
-        Multiple rows are OR-ed: first matching rule wins.
-        """
+        """Apply a Medicaid coverage policy defined in a CSV config file."""
         result = pop_df.copy()
 
         if 'Medicaid_Status' not in result.columns:
@@ -284,10 +231,7 @@ class MedicaidPolicySimulator:
         return result
 
     def apply_baseline(self, pop_df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Baseline scenario: current Medicaid expansion (138% FPL).
-        No coverage changes; keeps existing insurance and screening.
-        """
+        """Baseline scenario: current Medicaid expansion (138% FPL)."""
         result = pop_df.copy()
         if 'Medicaid_Status' not in result.columns:
             result['Medicaid_Status'] = result.apply(
@@ -298,7 +242,6 @@ class MedicaidPolicySimulator:
         result['Policy_Notes'] = 'Baseline - 138% FPL threshold maintained'
         result['Coverage_Status_After_Policy'] = result['Health_Insurance_Status']
 
-        # Recompute screening using the SAME logic, but baseline insurance
         result = self.screening_calculator.assign_screening_to_population(
             result,
             insurance_column='Coverage_Status_After_Policy'
@@ -311,9 +254,7 @@ class MedicaidPolicySimulator:
     # ========================================================================
 
     def _generate_comparison_report(self, scenarios: Dict) -> Dict:
-        """
-        Generate comparison report across all policy scenarios.
-        """
+        """Generate comparison report across all policy scenarios."""
         comparison = {}
         for scenario_name, scenario_df in scenarios.items():
             insured_count = (scenario_df['Coverage_Status_After_Policy'] == 'Insured').sum()
@@ -352,67 +293,41 @@ class MedicaidPolicySimulator:
     def _extract_age_from_group(self, age_group: str) -> int:
         """Approximate age from age group string."""
         age_map = {
-            'Under5': 2,
-            '5to9': 7,
-            '10to14': 12,
-            '15to17': 16,
-            '18to19': 18,
-            '20': 20,
-            '21': 21,
-            '22to24': 23,
-            '25to29': 27,
-            '30to34': 32,
-            '35to39': 37,
-            '40to44': 42,
-            '45to49': 47,
-            '50to54': 52,
-            '55to59': 57,
-            '60to61': 60,
-            '62to64': 63,
-            '65to66': 65,
-            '67to69': 68,
-            '70to74': 72,
-            '75to79': 77,
-            '80to84': 82,
-            '85plus': 87,
+            'Under5': 2, '5to9': 7, '10to14': 12, '15to17': 16, '18to19': 18,
+            '20': 20, '21': 21, '22to24': 23, '25to29': 27, '30to34': 32,
+            '35to39': 37, '40to44': 42, '45to49': 47, '50to54': 52, '55to59': 57,
+            '60to61': 60, '62to64': 63, '65to66': 65, '67to69': 68, '70to74': 72,
+            '75to79': 77, '80to84': 82, '85plus': 87,
         }
         return age_map.get(age_group, 40)
 
 
 # ============================================================================
-# MAIN: CSV-DRIVEN POLICY SIMULATION
+# MAIN: CSV-DRIVEN POLICY SIMULATION WITH ECONOMICS
 # ============================================================================
 
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Medicaid Policy Simulator (CSV-driven, screening-aware)"
+        description="Medicaid Policy Simulator with Screening & Economic Analysis"
     )
-    parser.add_argument(
-        "--population", required=True,
-        help="Synthetic population CSV from model.py (e.g., synthetic_population.csv)"
-    )
-    parser.add_argument(
-        "--screening-joint-dist", required=True,
-        help="Screening joint distributions CSV (same as model.py Stage 2)"
-    )
-    parser.add_argument(
-        "--colon-rates", required=True,
-        help="Colon screening rates CSV (same as model.py Stage 2)"
-    )
-    parser.add_argument(
-        "--policy", action="append", required=False,
-        help="Policy CSV file (can specify multiple --policy options). Omit for baseline only."
-    )
-    parser.add_argument(
-        "--output-dir", default=".",
-        help="Directory to save scenario outputs and summary (default: current dir)"
-    )
+    parser.add_argument("--population", required=True,
+                       help="Synthetic population CSV from model.py")
+    parser.add_argument("--screening-joint-dist", required=True,
+                       help="Screening joint distributions CSV")
+    parser.add_argument("--colon-rates", required=True,
+                       help="Colon screening rates CSV")
+    parser.add_argument("--economics-params", required=False,
+                       help="Economics parameters CSV (optional for cost analysis)")
+    parser.add_argument("--policy", action="append", required=False,
+                       help="Policy CSV file (can specify multiple --policy options)")
+    parser.add_argument("--output-dir", default=".",
+                       help="Directory to save scenario outputs")
     args = parser.parse_args()
 
     print("=" * 80)
-    print("MEDICAID POLICY SIMULATOR (CSV-Driven + Screening Recalculation)")
+    print("MEDICAID POLICY SIMULATOR (CSV-Driven + Screening + Economic Analysis)")
     print("=" * 80)
 
     print(f"\nLoading synthetic population from: {args.population}")
@@ -423,16 +338,17 @@ if __name__ == "__main__":
                      'Race_Ethnicity', 'Tract_GEOID']
     missing = [c for c in required_cols if c not in pop_df.columns]
     if missing:
-        raise ValueError(f"Input file missing required columns from model.py: {missing}")
+        raise ValueError(f"Input file missing required columns: {missing}")
 
     simulator = MedicaidPolicySimulator(
         screening_joint_distributions_csv=args.screening_joint_dist,
         colon_rates_csv=args.colon_rates,
+        economics_parameters_csv=args.economics_params
     )
 
     scenarios = {}
 
-    # Baseline scenario (always included)
+    # Baseline scenario
     print("\n" + "-" * 80)
     print("Applying BASELINE policy (138% FPL threshold, no changes)...")
     baseline_df = simulator.apply_baseline(pop_df)
@@ -441,7 +357,7 @@ if __name__ == "__main__":
     baseline_df.to_csv(baseline_path, index=False)
     print(f"✓ Saved: {baseline_path}")
 
-    # Apply each policy CSV
+    # Apply each policy
     if args.policy:
         for policy_path in args.policy:
             print("\n" + "-" * 80)
@@ -456,30 +372,141 @@ if __name__ == "__main__":
             print(f"Applying policy: {policy_name}")
 
             policy_result = simulator.apply_policy_from_config(pop_df, policy_df)
-
-            # Recompute screening after policy based on Coverage_Status_After_Policy
             policy_result = simulator.screening_calculator.assign_screening_to_population(
                 policy_result,
                 insurance_column='Coverage_Status_After_Policy'
             )
 
             scenarios[policy_name] = policy_result
-
             out_file = f"{args.output_dir}/population_medicaid_{policy_name}.csv"
             policy_result.to_csv(out_file, index=False)
             print(f"✓ Saved: {out_file}")
     else:
-        print("\nℹ No policy CSVs specified (--policy). Running baseline only.")
+        print("\nℹ No policy CSVs specified. Running baseline only.")
 
-    # Generate and display comparison
+    # Generate policy comparison summary
     print("\n" + "=" * 80)
     print("POLICY COMPARISON SUMMARY")
     print("=" * 80)
     comparison = simulator._generate_comparison_report(scenarios)
-
     comparison_df = pd.DataFrame(comparison).T
     summary_path = f"{args.output_dir}/policy_comparison_summary.csv"
     comparison_df.to_csv(summary_path)
     print(f"\n✓ Saved comparison summary: {summary_path}\n")
     print(comparison_df.to_string())
+
+    # Economic analysis (if parameters provided)
+    if simulator.economics_model:
+        print("\n" + "=" * 80)
+        print("ECONOMIC IMPACT ANALYSIS")
+        print("=" * 80)
+
+        # Add costs to all scenarios
+        scenarios_with_costs = {}
+        for scenario_name, scenario_df in scenarios.items():
+            print(f"\nCalculating costs for {scenario_name}...")
+            costs_df = simulator.economics_model.apply_costs_to_population(scenario_df)
+            scenarios_with_costs[scenario_name] = costs_df
+            
+            # Save scenario with costs
+            costs_path = f"{args.output_dir}/population_medicaid_{scenario_name}_with_costs.csv"
+            costs_df.to_csv(costs_path, index=False)
+            print(f"✓ Saved: {costs_path}")
+
+        # Generate economic summaries per scenario
+        print("\n" + "-" * 80)
+        print("SCENARIO COST SUMMARIES")
+        print("-" * 80)
+        
+        economic_summaries = []
+        for scenario_name, costs_df in scenarios_with_costs.items():
+            report = simulator.economics_model.generate_cost_report(costs_df)
+            economic_summaries.append({
+                'Scenario': scenario_name,
+                'Total_Population': report['total_population'],
+                'Total_Cost': report['total_cost'],
+                'Avg_Cost_Per_Person': report['avg_cost_per_person'],
+                'Median_Cost_Per_Person': report['median_cost_per_person'],
+                'Screened_Count': report['screened_count'],
+                'Unscreened_Count': report['unscreened_count'],
+                'Avg_Cost_Screened': report.get('avg_cost_screened', 0),
+                'Avg_Cost_Unscreened': report.get('avg_cost_unscreened', 0),
+                'Net_Savings_From_Screening': report.get('net_savings_from_screening', 0),
+            })
+
+            print(f"\n{scenario_name}:")
+            print(f"  Total cost: ${report['total_cost']:,.0f}")
+            print(f"  Avg cost per person: ${report['avg_cost_per_person']:,.2f}")
+            print(f"  Screened ({report['screened_count']}): ${report.get('avg_cost_screened', 0):,.2f} avg")
+            print(f"  Unscreened ({report['unscreened_count']}): ${report.get('avg_cost_unscreened', 0):,.2f} avg")
+            if 'net_savings_from_screening' in report:
+                print(f"  Net savings from screening: ${report['net_savings_from_screening']:,.0f}")
+
+        # Save economic summary
+        econ_summary_df = pd.DataFrame(economic_summaries)
+        econ_summary_path = f"{args.output_dir}/economic_impact_summary.csv"
+        econ_summary_df.to_csv(econ_summary_path, index=False)
+        print(f"\n✓ Saved economic summary: {econ_summary_path}")
+
+        # Compare baseline to policy scenarios (missed screening costs)
+        if len(scenarios_with_costs) > 1:
+            print("\n" + "=" * 80)
+            print("ECONOMIC IMPACT: MEDICAID LOSSES & MISSED SCREENING COSTS")
+            print("=" * 80)
+            
+            baseline_costs = scenarios_with_costs['Baseline']
+            baseline_report = simulator.economics_model.generate_cost_report(baseline_costs)
+            
+            for scenario_name, policy_costs in scenarios_with_costs.items():
+                if scenario_name != 'Baseline':
+                    comparison_report = simulator.economics_model.generate_scenario_comparison(
+                        baseline_costs, policy_costs, scenario_name
+                    )
+                    
+                    # Extract key metrics
+                    individuals_lost_coverage = comparison_report['individuals_lost_coverage']
+                    individuals_lost_screening = comparison_report['individuals_lost_screening']
+                    individuals_lost_both = comparison_report['individuals_lost_both']
+                    treatment_cost_increase = comparison_report['total_treatment_cost_increase']
+                    avg_treatment_cost_increase = comparison_report['avg_treatment_cost_increase_per_affected']
+                    total_cost_change = comparison_report['total_cost_change']
+                    
+                    print(f"\n{scenario_name}:")
+                    print(f"  " + "─" * 76)
+                    print(f"  Medicaid Coverage Losses:")
+                    print(f"    • Individuals who lost coverage: {individuals_lost_coverage:,} "
+                          f"({100*individuals_lost_coverage/len(policy_costs):.2f}% of population)")
+                    print(f"    • Also lost screening: {individuals_lost_both:,}")
+                    
+                    if individuals_lost_both > 0:
+                        print(f"\n  Economic Impact (Lost Screening Coverage):")
+                        print(f"    • Affected individuals: {individuals_lost_both:,}")
+                        print(f"    • ADDITIONAL TREATMENT COSTS: ${treatment_cost_increase:,.0f}")
+                        print(f"    • Avg treatment cost increase per person: ${avg_treatment_cost_increase:,.2f}")
+                        print(f"    → This represents HIGHER cancer treatment costs because")
+                        print(f"      unscreened individuals are diagnosed at later stages")
+                        
+                        # Show accounting breakdown
+                        screening_savings = individuals_lost_both * simulator.economics_model.screening_cost
+                        print(f"\n  Accounting Breakdown:")
+                        print(f"    • Treatment cost increase (late-stage cancers): +${treatment_cost_increase:,.0f}")
+                        print(f"    • Screening procedure cost saved: -${screening_savings:,.0f}")
+                        print(f"    • Net accounting impact: ${total_cost_change:,.0f}")
+                        print(f"    → Policy appears 'cheaper' by ${-total_cost_change:,.0f} due to avoided screening")
+                        print(f"    → BUT society pays ${treatment_cost_increase:,.0f} MORE treating advanced cancers")
+                        
+                        # Context: compare to baseline screening benefit
+                        print(f"\n  Context (Baseline Scenario):")
+                        print(f"    • Total population screening savings: ${baseline_report['net_savings_from_screening']:,.0f}")
+                        print(f"    • Screening prevents ~{baseline_report['net_savings_from_screening']/50000:.0f} advanced cancers")
+                        print(f"    • Policy-driven screening loss undermines this benefit")
+                    else:
+                        print(f"    → No individuals lost both coverage and screening")
+                    
+                    # Save affected individuals with detailed costs
+                    if len(comparison_report['affected_individuals_dataframe']) > 0:
+                        affected_path = f"{args.output_dir}/{scenario_name}_missed_screening_costs.csv"
+                        comparison_report['affected_individuals_dataframe'].to_csv(affected_path, index=False)
+                        print(f"\n  ✓ Saved detailed cost breakdown: {affected_path}")
+
     print("\n" + "=" * 80)
