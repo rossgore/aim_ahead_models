@@ -1,38 +1,47 @@
 """
 INTEGRATED SYNTHETIC POPULATION PIPELINE (REFACTORED - DUAL JOINT DISTRIBUTIONS)
+
 ================================================================================
 
 Combines three sequential scripts into a single, unified pipeline:
+
 1. Generate synthetic population using IPF (with dedicated joint distributions)
 2. Assign colon cancer screening status (INDEPENDENT with its own joint distributions)
 3. Calculate CCRAT risk assessment (INDEPENDENT)
 
 KEY CHANGE: Now accepts TWO separate joint_distributions CSVs:
+
 - ipf_joint_distributions_csv: For Stage 1 (synthetic population generation)
 - screening_joint_distributions_csv: For Stage 2 (screening status assignment)
 
 Both Stages 2 and 3 operate independently from demographics.
 
+Screening logic is extracted to screening_calculator.py for reuse.
+
 Usage:
-    pipeline = IntegratedSyntheticPopulationPipeline(
-        demographics_csv="hampton-roads-with-acs-demographics.csv",
-        ipf_joint_distributions_csv="ipf-joint-distributions.csv",
-        screening_joint_distributions_csv="screening-joint-distributions.csv",
-        colon_rates_csv="hampton_roads_colon_screen.csv",
-        ccrat_parameters_csv="ccrat-parameters.csv",
-        scaling_factor=100
-    )
-    
-    results_df = pipeline.run(
-        output_file="synthetic_population_complete.csv",
-        sample_size=100
-    )
+
+pipeline = IntegratedSyntheticPopulationPipeline(
+    demographics_csv="hampton-roads-with-acs-demographics.csv",
+    ipf_joint_distributions_csv="ipf-joint-distributions.csv",
+    screening_joint_distributions_csv="screening-joint-distributions.csv",
+    colon_rates_csv="hampton_roads_colon_screen.csv",
+    ccrat_parameters_csv="ccrat-parameters.csv",
+    scaling_factor=100
+)
+
+results_df = pipeline.run(
+    output_file="synthetic_population_complete.csv",
+    sample_size=100
+)
 """
 
 import pandas as pd
 import numpy as np
 from typing import Dict, Optional, Tuple
 import logging
+
+# Import reusable screening calculator
+from screening_calculator import ScreeningCalculator
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(message)s')
@@ -41,7 +50,9 @@ logger = logging.getLogger(__name__)
 
 class IntegratedSyntheticPopulationPipeline:
     """
-    Unified pipeline ...
+    Unified pipeline for generating synthetic population with screening and risk.
+    
+    Uses screening_calculator.py for all screening logic to avoid duplication.
     """
 
     def __init__(self,
@@ -51,35 +62,29 @@ class IntegratedSyntheticPopulationPipeline:
                  colon_rates_csv: str,
                  ccrat_parameters_csv: str,
                  scaling_factor: int = 100):
-
         logger.info("=" * 80)
         logger.info("INITIALIZING INTEGRATED SYNTHETIC POPULATION PIPELINE")
-        logger.info("(Dual Joint Distributions Mode)")
+        logger.info("(Dual Joint Distributions Mode + Reusable Screening Calculator)")
         logger.info("=" * 80)
 
         try:
             logger.info(f"\n1. Loading demographics from: {demographics_csv}")
             self.demographics_df = pd.read_csv(demographics_csv)
             logger.info(f" ✓ Loaded {len(self.demographics_df)} census tracts")
-            logger.info(f"   Demographics columns: {list(self.demographics_df.columns)[:10]} ...")
+            logger.info(f" Demographics columns: {list(self.demographics_df.columns)[:10]} ...")
 
             logger.info(f"\n2. Loading IPF joint distributions from: {ipf_joint_distributions_csv}")
             self.ipf_joint_dist_df = pd.read_csv(ipf_joint_distributions_csv)
             logger.info(f" ✓ Loaded IPF joint distributions for {len(self.ipf_joint_dist_df)} tracts")
-            logger.info(f"   IPF joint columns: {list(self.ipf_joint_dist_df.columns)[:10]} ...")
+            logger.info(f" IPF joint columns: {list(self.ipf_joint_dist_df.columns)[:10]} ...")
 
-            logger.info(f"\n3. Loading Screening joint distributions from: {screening_joint_distributions_csv}")
-            self.screening_joint_dist_df = pd.read_csv(screening_joint_distributions_csv)
-            logger.info(f" ✓ Loaded Screening joint distributions for {len(self.screening_joint_dist_df)} tracts")
-
-            logger.info(f"\n4. Loading colon screening rates from: {colon_rates_csv}")
-            self.colon_rates_df = pd.read_csv(colon_rates_csv)
-            self.colon_rates_dict = dict(
-                zip(self.colon_rates_df['GEOID'], self.colon_rates_df['COLON_SCREEN_RATE'])
+            logger.info(f"\n3. Initializing Screening Calculator...")
+            self.screening_calculator = ScreeningCalculator(
+                screening_joint_distributions_csv=screening_joint_distributions_csv,
+                colon_rates_csv=colon_rates_csv
             )
-            logger.info(f" ✓ Loaded screening rates for {len(self.colon_rates_dict)} tracts")
 
-            logger.info(f"\n5. Loading CCRAT parameters from: {ccrat_parameters_csv}")
+            logger.info(f"\n4. Loading CCRAT parameters from: {ccrat_parameters_csv}")
             self.ccrat_parameters_df = pd.read_csv(ccrat_parameters_csv)
             logger.info(f" ✓ Loaded {len(self.ccrat_parameters_df)} CCRAT parameters")
 
@@ -87,27 +92,16 @@ class IntegratedSyntheticPopulationPipeline:
             self.ccrat_parameters = self._parse_ccrat_parameters(self.ccrat_parameters_df)
             logger.info(f" ✓ Parsed parameter categories: {', '.join(self.ccrat_parameters.keys())}")
 
-            logger.info("\n6. Preparing Stage 1 dataset (demographics + IPF joint distributions)...")
+            logger.info("\n5. Preparing Stage 1 dataset (demographics + IPF joint distributions)...")
 
-            # IMPORTANT: keep GEOID to merge on; drop only duplicate non-key columns
+            # Merge demographics with IPF joint distributions
             ipf_subset = self.ipf_joint_dist_df.copy()
-            # If your IPF file has Tract_Name, keep GEOID and all others:
-            # or explicitly: ipf_subset = self.ipf_joint_dist_df.drop(columns=['Tract_Name'], errors='ignore')
-
             self.stage1_df = self.demographics_df.merge(
                 ipf_subset,
                 on='GEOID',
                 how='left'
             )
-
             logger.info(f" ✓ Stage 1 dataset has shape {self.stage1_df.shape}")
-
-            logger.info("\n7. Preparing Stage 2 dataset (screening joint distributions)...")
-            self.screening_joint_dict = dict(
-                zip(self.screening_joint_dist_df['GEOID'],
-                    self.screening_joint_dist_df.to_dict('records'))
-            )
-            logger.info(" ✓ Stage 2 screening joint distributions indexed by GEOID")
 
             self.scaling_factor = scaling_factor
 
@@ -143,10 +137,9 @@ class IntegratedSyntheticPopulationPipeline:
             logger.error(f"ERROR during initialization: {e}")
             raise
 
-
-    # ============================================================================
+    # ========================================================================
     # STAGE 1: SYNTHETIC POPULATION GENERATION (IPF)
-    # ============================================================================
+    # ========================================================================
 
     def get_marginal_age_gender(self, row) -> Dict:
         """Extract age×gender marginal distribution from census data."""
@@ -158,10 +151,11 @@ class IntegratedSyntheticPopulationPipeline:
             female_count = row.get(female_col, 0) or 0
             age_gender_probs[(age_group, 'M')] = float(male_count)
             age_gender_probs[(age_group, 'F')] = float(female_count)
-        
+
         total = sum(age_gender_probs.values())
         if total > 0:
             age_gender_probs = {k: v/total for k, v in age_gender_probs.items()}
+
         return age_gender_probs
 
     def get_marginal_race(self, row) -> Dict:
@@ -170,10 +164,11 @@ class IntegratedSyntheticPopulationPipeline:
         for race in self.races:
             count = row.get(race, 0) or 0
             race_probs[race] = float(count)
-        
+
         total = sum(race_probs.values())
         if total > 0:
             race_probs = {k: v/total for k, v in race_probs.items()}
+
         return race_probs
 
     def get_joint_income_given_race_ipf(self, row, race: str) -> Dict:
@@ -183,10 +178,11 @@ class IntegratedSyntheticPopulationPipeline:
             col_name = f'{race}_P_Income_{bracket}'
             prob = row.get(col_name, 1.0 / len(self.income_brackets))
             income_probs[bracket] = max(0, float(prob))
-        
+
         total = sum(income_probs.values())
         if total > 0:
             income_probs = {k: v/total for k, v in income_probs.items()}
+
         return income_probs
 
     def get_joint_education_given_race_ipf(self, row, race: str) -> Dict:
@@ -196,69 +192,72 @@ class IntegratedSyntheticPopulationPipeline:
             col_name = f'{race}_P_Education_{edu_level}'
             prob = row.get(col_name, 1.0 / len(self.education_levels))
             edu_probs[edu_level] = max(0, float(prob))
-        
+
         total = sum(edu_probs.values())
         if total > 0:
             edu_probs = {k: v/total for k, v in edu_probs.items()}
+
         return edu_probs
 
     def get_joint_insurance_given_race_age_ipf(self, row, race: str, age_group: str) -> Dict:
         """Get P(Insurance | Race, Age) from IPF joint distributions."""
-        age_for_insurance = 'Over65' if age_group in ['65to66', '67to69', '70to74', 
+        age_for_insurance = 'Over65' if age_group in ['65to66', '67to69', '70to74',
                                                         '75to79', '80to84', '85plus'] else 'Under65'
+
         col_name = f'{race}_P_Insurance_{age_for_insurance}_Insured'
         insured_prob = row.get(col_name, None)
-        
+
         if insured_prob is None or pd.isna(insured_prob):
             fallback_col = f'P_Insurance_{age_for_insurance}'
             insured_prob = row.get(fallback_col, 0.89 if age_for_insurance == 'Under65' else 0.975)
-        
+
         if pd.isna(insured_prob) or insured_prob < 0 or insured_prob > 1:
             insured_prob = 0.89 if age_for_insurance == 'Under65' else 0.975
-        
+
         return {'Insured': insured_prob, 'Uninsured': 1.0 - insured_prob}
 
-    def ipf_fit(self, sample_size: int, row, max_iterations: int = 20, 
+    def ipf_fit(self, sample_size: int, row, max_iterations: int = 20,
                 tolerance: float = 0.001) -> pd.DataFrame:
         """Iterative Proportional Fitting to generate synthetic individuals using IPF joint distributions."""
         age_gender_target = self.get_marginal_age_gender(row)
         race_target = self.get_marginal_race(row)
-        
+
         for iteration in range(max_iterations):
             individuals = []
-            
+
             for person_id in range(sample_size):
                 age_gender_options = [(k, v) for k, v in age_gender_target.items() if v > 0]
                 if age_gender_options:
                     (age_group, gender), _ = max(age_gender_options,
-                                                 key=lambda x: x[1] + np.random.exponential(0.1))
+                                                  key=lambda x: x[1] + np.random.exponential(0.1))
                 else:
                     age_group, gender = '25to29', 'M'
-                
+
                 race_options = [(k, v) for k, v in race_target.items() if v > 0]
                 if race_options:
                     race, _ = max(race_options,
-                                 key=lambda x: x[1] + np.random.exponential(0.1))
+                                  key=lambda x: x[1] + np.random.exponential(0.1))
                 else:
                     race = 'White_NonHispanic'
-                
+
                 income_dist = self.get_joint_income_given_race_ipf(row, race)
                 income_options = [(k, v) for k, v in income_dist.items() if v > 0]
                 income = max(income_options, key=lambda x: x[1])[0] if income_options else 'Less10k'
-                
-                is_25plus = age_group not in ['Under5', '5to9', '10to14', '15to17', 
+
+                is_25plus = age_group not in ['Under5', '5to9', '10to14', '15to17',
                                               '18to19', '20', '21', '22to24']
+
                 if is_25plus:
                     edu_dist = self.get_joint_education_given_race_ipf(row, race)
                     edu_options = [(k, v) for k, v in edu_dist.items() if v > 0]
                     education = max(edu_options, key=lambda x: x[1])[0] if edu_options else 'High_School_Graduate'
                 else:
                     education = 'Under25'
-                
+
                 insurance_dist = self.get_joint_insurance_given_race_age_ipf(row, race, age_group)
                 insurance = np.random.choice(['Insured', 'Uninsured'],
-                                           p=[insurance_dist['Insured'], insurance_dist['Uninsured']])
-                
+                                             p=[insurance_dist['Insured'], insurance_dist['Uninsured']])
+
                 individuals.append({
                     'age_group': age_group,
                     'gender': gender,
@@ -267,62 +266,64 @@ class IntegratedSyntheticPopulationPipeline:
                     'education': education,
                     'insurance': insurance
                 })
-            
+
             synth_df = pd.DataFrame(individuals)
+
             age_gender_synth = {}
             for age_group in self.age_groups:
                 for gender in ['M', 'F']:
-                    count = len(synth_df[(synth_df['age_group'] == age_group) & 
-                                        (synth_df['gender'] == gender)])
+                    count = len(synth_df[(synth_df['age_group'] == age_group) &
+                                         (synth_df['gender'] == gender)])
                     age_gender_synth[(age_group, gender)] = count / sample_size if sample_size > 0 else 0
-            
+
             race_synth = {}
             for race in self.races:
                 count = len(synth_df[synth_df['race'] == race])
                 race_synth[race] = count / sample_size if sample_size > 0 else 0
-            
-            age_gender_rmse = np.sqrt(np.mean([(age_gender_target.get(k, 0) - 
-                                               age_gender_synth.get(k, 0))**2
-                                              for k in age_gender_target.keys()]))
+
+            age_gender_rmse = np.sqrt(np.mean([(age_gender_target.get(k, 0) -
+                                                age_gender_synth.get(k, 0))**2
+                                               for k in age_gender_target.keys()]))
+
             race_rmse = np.sqrt(np.mean([(race_target.get(k, 0) - race_synth.get(k, 0))**2
-                                        for k in race_target.keys()]))
-            
+                                         for k in race_target.keys()]))
+
             if age_gender_rmse < tolerance and race_rmse < tolerance:
                 break
-        
+
         return pd.DataFrame(individuals)
 
     def generate_synthetic_population(self, sample_size: int = 100) -> pd.DataFrame:
         """Generate synthetic individuals for all tracts using IPF with IPF joint distributions."""
         synthetic_individuals = []
-        
+
         for idx, row in self.stage1_df.iterrows():
             tract_id = row['GEOID']
             tract_name = row.get('NAME_y', row.get('Tract_Name', 'Unknown'))
             total_pop = row.get('Total_Population', 0)
-            
+
             if pd.isna(total_pop) or total_pop <= 0:
-                logger.warning(f"  Skipping {tract_name} - no population data")
+                logger.warning(f" Skipping {tract_name} - no population data")
                 continue
-            
+
             race_sum = row[self.races].sum() if all(r in row.index for r in self.races) else 0
+
             if race_sum <= 0:
-                logger.warning(f"  {tract_name} - no demographic data available")
+                logger.warning(f" {tract_name} - no demographic data available")
                 continue
-            
+
             tract_sample_size = max(5, int(total_pop / self.scaling_factor))
-            
+
             if (idx + 1) % 50 == 0:
-                logger.info(f"  Processing tract {idx + 1}/{len(self.stage1_df)}: {tract_name}")
-            
+                logger.info(f" Processing tract {idx + 1}/{len(self.stage1_df)}: {tract_name}")
+
             tract_individuals = self.ipf_fit(tract_sample_size, row)
-            
             tract_individuals['Tract_GEOID'] = tract_id
             tract_individuals['Tract_Name'] = tract_name
             tract_individuals['Individual_ID'] = [f"{tract_id}_{i:04d}" for i in range(len(tract_individuals))]
             tract_individuals['Tract_Total_Pop'] = total_pop
             tract_individuals['Median_Household_Income'] = row.get('Median_Household_Income', np.nan)
-            
+
             tract_individuals = tract_individuals.rename(columns={
                 'age_group': 'Age_Group',
                 'gender': 'Gender',
@@ -331,114 +332,44 @@ class IntegratedSyntheticPopulationPipeline:
                 'education': 'Education_Level',
                 'insurance': 'Health_Insurance_Status'
             })
-            
+
             tract_individuals = tract_individuals[['Tract_GEOID', 'Tract_Name', 'Individual_ID',
-                                                  'Age_Group', 'Gender', 'Race_Ethnicity',
-                                                  'Income_Bracket', 'Education_Level',
-                                                  'Health_Insurance_Status', 'Tract_Total_Pop',
-                                                  'Median_Household_Income']]
-            
+                                                    'Age_Group', 'Gender', 'Race_Ethnicity',
+                                                    'Income_Bracket', 'Education_Level',
+                                                    'Health_Insurance_Status', 'Tract_Total_Pop',
+                                                    'Median_Household_Income']]
+
             synthetic_individuals.append(tract_individuals)
-        
+
         return pd.concat(synthetic_individuals, ignore_index=True) if synthetic_individuals else pd.DataFrame()
 
-    # ============================================================================
-    # STAGE 2: INDEPENDENT SCREENING STATUS ASSIGNMENT (with screening joint dist)
-    # ============================================================================
+    # ========================================================================
+    # STAGE 2: INDEPENDENT SCREENING STATUS ASSIGNMENT (Using ScreeningCalculator)
+    # ========================================================================
 
-    def is_eligible_age_group(self, age_group: str) -> bool:
-        """Check if age group is eligible for screening (45-75 years)."""
-        eligible_ages = ['45to49', '50to54', '55to59', '60to61', '62to64', '65to66',
-                        '67to69', '70to74', '75to79']
-        return age_group in eligible_ages
-
-    def get_screening_joint_factors(self, geoid: str, age_group: str, race_ethnicity: str,
-                                   insurance_status: str) -> Tuple[float, float, float]:
-        """Extract screening adjustment factors from screening joint distributions."""
-        if geoid not in self.screening_joint_dict:
-            # Fallback to defaults if GEOID not in screening joint dist
-            return 1.0, 1.0, 1.0
-        
-        row_data = self.screening_joint_dict[geoid]
-        
-        # Age adjustment
-        age_col = f'{age_group}_Screening_Adjustment'
-        age_adj = row_data.get(age_col, 1.0)
-        if pd.isna(age_adj):
-            age_adj = 1.0
-        
-        # Insurance adjustment
-        insurance_col = f'{insurance_status}_Screening_Adjustment'
-        insurance_adj = row_data.get(insurance_col, 1.0)
-        if pd.isna(insurance_adj):
-            insurance_adj = 1.0
-        
-        # Race adjustment
-        race_col = f'{race_ethnicity}_Screening_Adjustment'
-        race_adj = row_data.get(race_col, 1.0)
-        if pd.isna(race_adj):
-            race_adj = 1.0
-        
-        return float(age_adj), float(insurance_adj), float(race_adj)
-
-    def calculate_screening_probability_with_joint_dist(self, tract_rate: float, 
-                                                        geoid: str, age_group: str,
-                                                        race_ethnicity: str,
-                                                        insurance_status: str) -> float:
+    def assign_screening_status(self, population_df: pd.DataFrame,
+                               insurance_column: str = 'Health_Insurance_Status') -> pd.DataFrame:
         """
-        Calculate individual screening probability using screening joint distributions.
-        INDEPENDENT of risk calculation.
-        """
+        Assign screening status using the reusable ScreeningCalculator.
         
-        age_adj, insurance_adj, race_adj = self.get_screening_joint_factors(
-            geoid, age_group, race_ethnicity, insurance_status
+        This delegates all screening logic to screening_calculator.py to avoid duplication.
+
+        Args:
+            population_df: Synthetic population dataframe
+            insurance_column: Name of the insurance status column to use
+                (allows flexibility for policy scenarios with updated insurance)
+
+        Returns:
+            Population with screening assignment
+        """
+        return self.screening_calculator.assign_screening_to_population(
+            population_df,
+            insurance_column=insurance_column
         )
-        
-        combined_adjustment = age_adj * insurance_adj * race_adj
-        adjusted_prob = tract_rate * combined_adjustment
-        adjusted_prob = max(0.01, min(0.99, adjusted_prob))
-        
-        return adjusted_prob
 
-    def assign_screening_status(self, population_df: pd.DataFrame) -> pd.DataFrame:
-        """Assign colon cancer screening status using screening joint distributions (INDEPENDENT)."""
-        screening_probs = []
-        screening_status = []
-        age_eligibility = []
-        
-        for idx, row in population_df.iterrows():
-            age_group = row['Age_Group']
-            
-            if not self.is_eligible_age_group(age_group):
-                screening_probs.append(0.0)
-                screening_status.append('Not_Screened')
-                age_eligibility.append('Outside_45_75_range')
-            else:
-                geoid = row['Tract_GEOID']
-                tract_rate = self.colon_rates_dict.get(geoid, 0.68) / 100
-                
-                prob = self.calculate_screening_probability_with_joint_dist(
-                    tract_rate=tract_rate,
-                    geoid=geoid,
-                    age_group=age_group,
-                    race_ethnicity=row['Race_Ethnicity'],
-                    insurance_status=row['Health_Insurance_Status']
-                )
-                
-                screens = np.random.random() < prob
-                screening_probs.append(prob)
-                screening_status.append('Screened' if screens else 'Not_Screened')
-                age_eligibility.append('Eligible_45_75')
-        
-        population_df['Age_Eligibility'] = age_eligibility
-        population_df['Colon_Screening_Probability'] = screening_probs
-        population_df['Colon_Cancer_Screening_Status'] = screening_status
-        
-        return population_df
-
-    # ============================================================================
+    # ========================================================================
     # STAGE 3: INDEPENDENT CCRAT RISK ASSESSMENT
-    # ============================================================================
+    # ========================================================================
 
     def map_age_group(self, age_group: str) -> Optional[str]:
         """Map Age_Group to CCRAT age category."""
@@ -495,14 +426,15 @@ class IntegratedSyntheticPopulationPipeline:
         return education_mapping.get(education_level, 'hsgraduate')
 
     def calculate_risk(self, age_group: str, gender: str, race_ethnicity: str,
-                       income_bracket: str, education_level: str) -> Optional[Dict]:
+                      income_bracket: str, education_level: str) -> Optional[Dict]:
         """
         Calculate CCRAT risk for individual (INDEPENDENT of screening status).
-        Always returns both screened and unscreened risk.
 
+        Always returns both screened and unscreened risk.
         Wrapper around the CSV-driven _calculate_ccrat_risk().
         """
         ccrat_age = self.map_age_group(age_group)
+
         if ccrat_age is None:
             return None
 
@@ -519,6 +451,7 @@ class IntegratedSyntheticPopulationPipeline:
             income=income_bracket,
             education=education_level
         )
+
         if ccrat is None:
             return None
 
@@ -538,7 +471,7 @@ class IntegratedSyntheticPopulationPipeline:
     def assess_risk(self, population_df: pd.DataFrame) -> pd.DataFrame:
         """Calculate CCRAT risk for entire population (INDEPENDENT)."""
         risks = []
-        
+
         for idx, row in population_df.iterrows():
             risk = self.calculate_risk(
                 row['Age_Group'],
@@ -547,7 +480,7 @@ class IntegratedSyntheticPopulationPipeline:
                 row['Income_Bracket'],
                 row['Education_Level']
             )
-            
+
             if risk is not None:
                 risks.append(risk)
             else:
@@ -562,15 +495,15 @@ class IntegratedSyntheticPopulationPipeline:
                     'Education_Multiplier': None,
                     'Risk_Category': 'Outside Screening Age'
                 })
-        
+
         risk_df = pd.DataFrame(risks)
         results = pd.concat([population_df, risk_df], axis=1)
-        
+
         return results
 
-    # ============================================================================
-    # MAIN PIPELINE EXECUTION
-    # ============================================================================
+    # ========================================================================
+    # PARAMETER PARSING AND HELPERS
+    # ========================================================================
 
     def _parse_ccrat_parameters(self, df: pd.DataFrame) -> dict:
         """Parse CCRAT parameters CSV into dictionaries for easy lookup."""
@@ -584,26 +517,31 @@ class IntegratedSyntheticPopulationPipeline:
                 for _, row in category_data.iterrows():
                     age = row['Parameter_Name'].replace('risk_', '')
                     params['age_baseline_risk'][age] = row['Parameter_Value']
+
             elif category == 'gender_multiplier':
                 params['gender_multiplier'] = {}
                 for _, row in category_data.iterrows():
                     gender = row['Parameter_Name'].title()
                     params['gender_multiplier'][gender] = row['Parameter_Value']
+
             elif category == 'race_multiplier':
                 params['race_multiplier'] = {}
                 for _, row in category_data.iterrows():
                     race = row['Parameter_Name'].title()
                     params['race_multiplier'][race] = row['Parameter_Value']
+
             elif category == 'income_multiplier':
                 params['income_multiplier'] = {}
                 for _, row in category_data.iterrows():
                     income = row['Parameter_Name']
                     params['income_multiplier'][income] = row['Parameter_Value']
+
             elif category == 'education_multiplier':
                 params['education_multiplier'] = {}
                 for _, row in category_data.iterrows():
                     education = row['Parameter_Name']
                     params['education_multiplier'][education] = row['Parameter_Value']
+
             elif category == 'screening_effectiveness':
                 params['screening_effectiveness'] = category_data.iloc[0]['Parameter_Value']
 
@@ -628,10 +566,12 @@ class IntegratedSyntheticPopulationPipeline:
         }
 
         ccrat_age = age_mapping.get(age_group)
+
         if ccrat_age is None:
             return None
 
         baseline_risk = self.ccrat_parameters['age_baseline_risk'].get(ccrat_age, 0.5)
+
         gender_map = {'M': 'Male', 'F': 'Female'}
         gender_mult = self.ccrat_parameters['gender_multiplier'].get(gender_map.get(gender, 'Male'), 1.0)
 
@@ -641,6 +581,7 @@ class IntegratedSyntheticPopulationPipeline:
             'AIAN_NonHispanic': 'Aian', 'NHOPI_NonHispanic': 'Nhopi',
             'SomeOther_NonHispanic': 'Someother', 'TwoOrMore_NonHispanic': 'Twomore'
         }
+
         race_mult = self.ccrat_parameters['race_multiplier'].get(race_mapping.get(race, 'White'), 1.0)
 
         income_mapping = {
@@ -651,6 +592,7 @@ class IntegratedSyntheticPopulationPipeline:
             '75to100k': 'over75k', '100to125k': 'over75k', '125to150k': 'over75k',
             '150to200k': 'over75k', '200kplus': 'over75k'
         }
+
         income_mult = self.ccrat_parameters['income_multiplier'].get(income_mapping.get(income, '50kto75k'), 1.0)
 
         education_mapping = {
@@ -660,11 +602,15 @@ class IntegratedSyntheticPopulationPipeline:
             'Bachelors_Degree': 'bachelorplus', 'Masters_Degree': 'bachelorplus',
             'Professional_Beyond_Masters': 'bachelorplus'
         }
+
         education_mult = self.ccrat_parameters['education_multiplier'].get(education_mapping.get(education, 'hsgraduate'), 1.0)
 
         combined_multiplier = gender_mult * race_mult * income_mult * education_mult
+
         unscreened_risk = baseline_risk * combined_multiplier
+
         screening_effectiveness = self.ccrat_parameters['screening_effectiveness']
+
         screened_risk = unscreened_risk * (1 - screening_effectiveness)
 
         return {
@@ -679,90 +625,94 @@ class IntegratedSyntheticPopulationPipeline:
             'RiskCategory': self._categorize_risk(unscreened_risk)
         }
 
+    # ========================================================================
+    # MAIN PIPELINE EXECUTION
+    # ========================================================================
+
     def run(self, output_file: str, sample_size: int = 100) -> pd.DataFrame:
         """
         Execute the complete integrated pipeline with INDEPENDENT stages.
-        
+
         Args:
             output_file: Path to save the final CSV with all attributes
             sample_size: Target number of individuals per tract (default: 100)
-        
+
         Returns:
             DataFrame with complete synthetic population
         """
-        
         logger.info("\n" + "=" * 80)
         logger.info("STAGE 1: GENERATING SYNTHETIC POPULATION (IPF with IPF Joint Distributions)")
         logger.info("=" * 80)
-        
+
         synth_pop = self.generate_synthetic_population(sample_size=sample_size)
         logger.info(f"✓ Generated {len(synth_pop)} synthetic individuals\n")
-        
+
         logger.info("=" * 80)
-        logger.info("STAGE 2: ASSIGNING SCREENING STATUS (INDEPENDENT - Using Screening Joint Distributions)")
+        logger.info("STAGE 2: ASSIGNING SCREENING STATUS (INDEPENDENT - Using ScreeningCalculator)")
         logger.info("=" * 80)
-        
+
         with_screening = self.assign_screening_status(synth_pop.copy())
+
         screened = (with_screening['Colon_Cancer_Screening_Status'] == 'Screened').sum()
         logger.info(f"✓ Assigned screening status independently")
-        logger.info(f"  - Screened: {screened} ({screened/len(with_screening)*100:.1f}%)")
-        logger.info(f"  - Not screened: {len(with_screening) - screened} ({(len(with_screening) - screened)/len(with_screening)*100:.1f}%)\n")
-        
+        logger.info(f" - Screened: {screened} ({screened/len(with_screening)*100:.1f}%)")
+        logger.info(f" - Not screened: {len(with_screening) - screened} ({(len(with_screening) - screened)/len(with_screening)*100:.1f}%)\n")
+
         logger.info("=" * 80)
         logger.info("STAGE 3: CALCULATING RISK ASSESSMENT (INDEPENDENT)")
         logger.info("=" * 80)
-        
+
         final_results = self.assess_risk(with_screening)
         logger.info(f"✓ Calculated risk independently\n")
-        
+
         logger.info("=" * 80)
         logger.info("SAVING RESULTS")
         logger.info("=" * 80)
-        
+
         final_results.to_csv(output_file, index=False)
         logger.info(f"✓ Saved complete synthetic population to: {output_file}\n")
-        
+
         self._print_summary(final_results)
-        
+
         return final_results
 
     def _print_summary(self, results: pd.DataFrame):
         """Print comprehensive summary statistics."""
-        
         logger.info("=" * 80)
         logger.info("FINAL SUMMARY STATISTICS")
         logger.info("=" * 80)
-        
+
         logger.info(f"\nPopulation Overview:")
-        logger.info(f"  Total individuals: {len(results)}")
-        logger.info(f"  Unique tracts: {results['Tract_GEOID'].nunique()}")
-        
-        logger.info(f"\nScreening Status (INDEPENDENT calculation with Screening Joint Distributions):")
+        logger.info(f" Total individuals: {len(results)}")
+        logger.info(f" Unique tracts: {results['Tract_GEOID'].nunique()}")
+
+        logger.info(f"\nScreening Status (INDEPENDENT calculation with ScreeningCalculator):")
         screened = (results['Colon_Cancer_Screening_Status'] == 'Screened').sum()
         not_screened = (results['Colon_Cancer_Screening_Status'] == 'Not_Screened').sum()
-        logger.info(f"  Screened: {screened} ({screened/len(results)*100:.1f}%)")
-        logger.info(f"  Not screened: {not_screened} ({not_screened/len(results)*100:.1f}%)")
-        
+        logger.info(f" Screened: {screened} ({screened/len(results)*100:.1f}%)")
+        logger.info(f" Not screened: {not_screened} ({not_screened/len(results)*100:.1f}%)")
+
         eligible_df = results[results['Age_Eligibility'] == 'Eligible_45_75']
         if len(eligible_df) > 0:
-            logger.info(f"\n  Among eligible ages (45-75):")
+            logger.info(f"\n Among eligible ages (45-75):")
             screened_eligible = (eligible_df['Colon_Cancer_Screening_Status'] == 'Screened').sum()
-            logger.info(f"    Screened: {screened_eligible} ({screened_eligible/len(eligible_df)*100:.1f}%)")
-        
+            logger.info(f" Screened: {screened_eligible} ({screened_eligible/len(eligible_df)*100:.1f}%)")
+
         screening_df = results[results['Unscreened_Risk'].notna()]
         if len(screening_df) > 0:
             logger.info(f"\nRisk Distribution (INDEPENDENT calculation):")
-            logger.info(f"  Mean unscreened risk: {screening_df['Unscreened_Risk'].mean():.4f}")
-            logger.info(f"  Median unscreened risk: {screening_df['Unscreened_Risk'].median():.4f}")
-            logger.info(f"  Std dev: {screening_df['Unscreened_Risk'].std():.4f}")
-            
+            logger.info(f" Mean unscreened risk: {screening_df['Unscreened_Risk'].mean():.4f}")
+            logger.info(f" Median unscreened risk: {screening_df['Unscreened_Risk'].median():.4f}")
+            logger.info(f" Std dev: {screening_df['Unscreened_Risk'].std():.4f}")
+
             logger.info(f"\nRisk Categories:")
             categories = screening_df['Risk_Category'].value_counts()
             for cat, count in categories.items():
                 pct = (count / len(screening_df)) * 100
-                logger.info(f"  {cat}: {count} ({pct:.1f}%)")
-        
+                logger.info(f" {cat}: {count} ({pct:.1f}%)")
+
         logger.info(f"\n{'='*80}\n")
+
 
 # ============================================================================
 # USAGE EXAMPLE
@@ -770,7 +720,7 @@ class IntegratedSyntheticPopulationPipeline:
 
 if __name__ == "__main__":
     import argparse
-    
+
     parser = argparse.ArgumentParser(description="Run Integrated Synthetic Population Pipeline")
     parser.add_argument("--demographics", required=True, help="Demographics CSV file")
     parser.add_argument("--ipf-joint-dist", required=True, help="IPF joint distributions CSV")
@@ -779,9 +729,9 @@ if __name__ == "__main__":
     parser.add_argument("--ccrat-parameters", required=True, help="CCRAT parameters CSV file")
     parser.add_argument("--output", required=True, help="Output CSV file")
     parser.add_argument("--scaling-factor", type=int, default=100, help="Scaling factor (default: 100)")
-    
+
     args = parser.parse_args()
-    
+
     pipeline = IntegratedSyntheticPopulationPipeline(
         demographics_csv=args.demographics,
         ipf_joint_distributions_csv=args.ipf_joint_dist,
@@ -790,5 +740,5 @@ if __name__ == "__main__":
         ccrat_parameters_csv=args.ccrat_parameters,
         scaling_factor=args.scaling_factor
     )
-    
+
     results = pipeline.run(output_file=args.output)

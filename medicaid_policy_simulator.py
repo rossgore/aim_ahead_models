@@ -1,8 +1,11 @@
 """
-Medicaid Policy Simulation Engine (CSV-Driven)
+Medicaid Policy Simulation Engine (CSV-Driven + Screening Recalculation)
 
 A fully configurable Medicaid coverage policy simulator that reads policy rules
 from external CSV files instead of hard-coding policy logic.
+
+After applying coverage changes, it can recompute colon cancer screening
+status using the same screening logic as model.py (via ScreeningCalculator).
 
 Policy CSV Schema:
 ──────────────────
@@ -26,24 +29,28 @@ Named Actions (built-in condition handlers):
 
 Example Usage:
 ──────────────
-  python3 medicaid_policy_simulator.py \\
-    --population output/synthetic_population.csv \\
-    --policy policies/income_tightening.csv \\
-    --policy policies/admin_churn.csv \\
+  python3 medicaid_policy_simulator.py \
+    --population output/synthetic_population.csv \
+    --screening-joint-dist data/screening-joint-distributions.csv \
+    --colon-rates data/colon-rates.csv \
+    --policy policies/income_tightening.csv \
+    --policy policies/admin_churn.csv \
     --output-dir output
 
 Input CSV from model.py should have columns:
-  - Income_Bracket (e.g., 'Less10k', '20to25k', '75to100k')
-  - Health_Insurance_Status (e.g., 'Insured', 'Uninsured')
+  - Tract_GEOID
   - Age_Group (e.g., '45to49', '65to69')
   - Race_Ethnicity (e.g., 'White_NonHispanic', 'Hispanic_Latino')
+  - Income_Bracket (e.g., 'Less10k', '20to25k', '75to100k')
+  - Health_Insurance_Status (e.g., 'Insured', 'Uninsured')
 """
 
 import pandas as pd
 import numpy as np
-from enum import Enum
 from typing import Dict, List, Tuple
 import logging
+
+from screening_calculator import ScreeningCalculator
 
 logger = logging.getLogger(__name__)
 
@@ -51,10 +58,11 @@ logger = logging.getLogger(__name__)
 class MedicaidPolicySimulator:
     """
     CSV-driven Medicaid coverage policy simulator.
-    
+
     Infers likely Medicaid status from synthetic population data and applies
-    policy rules defined in external CSV files.
-    
+    policy rules defined in external CSV files, then (optionally) recomputes
+    screening based on post-policy insurance status.
+
     Designed to work with the synthetic population output from model.py.
     """
 
@@ -63,9 +71,15 @@ class MedicaidPolicySimulator:
     FPL_FAMILY_3 = 31720    # Family of 3
     FPL_FAMILY_4 = 38775    # Family of 4
 
-    def __init__(self):
-        """Initialize policy simulator."""
+    def __init__(self,
+                 screening_joint_distributions_csv: str,
+                 colon_rates_csv: str):
+        """Initialize policy simulator + reusable screening calculator."""
         logger.info("Initialized MedicaidPolicySimulator (CSV-driven)")
+        self.screening_calculator = ScreeningCalculator(
+            screening_joint_distributions_csv=screening_joint_distributions_csv,
+            colon_rates_csv=colon_rates_csv,
+        )
 
     # ========================================================================
     # INCOME BRACKET MAPPING (model.py → policy brackets)
@@ -110,41 +124,23 @@ class MedicaidPolicySimulator:
         - If Uninsured: not Medicaid
         - If Insured + Low Income (< 138% FPL ≈ $20.7k): likely Medicaid
         - If Insured + Higher Income: likely private/employer insurance
-
-        Args:
-            row: Individual record from synthetic population (model.py output)
-
-        Returns:
-            Tuple of (is_medicaid: bool, reason: str)
         """
         insurance_status = row['Health_Insurance_Status']
         income_bracket_model = row['Income_Bracket']
 
-        # Uninsured individuals don't have Medicaid
         if insurance_status == 'Uninsured':
             return False, "Uninsured"
 
-        # Map model.py income bracket to policy bracket
         policy_bracket = self.map_model_income_to_policy_bracket(income_bracket_model)
         estimated_annual_income = self.get_income_bracket_value(policy_bracket)
 
-        # If low income (< 138% FPL) + Insured, likely Medicaid
         if estimated_annual_income < 25000 and insurance_status == 'Insured':
             return True, f"Low income (${estimated_annual_income}) + Insured"
 
-        # Otherwise, likely private/employer insurance
         return False, f"Income (${estimated_annual_income}) above Medicaid threshold"
 
     def get_income_bracket_value(self, income_bracket: str) -> float:
-        """
-        Get midpoint annual income for income bracket (policy brackets).
-
-        Args:
-            income_bracket: Income bracket string (policy bracket)
-
-        Returns:
-            Estimated annual income
-        """
+        """Get midpoint annual income for income bracket (policy brackets)."""
         income_map = {
             'Less10k': 5000,
             '10to25k': 17500,
@@ -162,7 +158,6 @@ class MedicaidPolicySimulator:
     def _cond_income_between_100_138_fpl(self, df: pd.DataFrame) -> pd.Series:
         """
         Mask for people with estimated income between 100% and 138% FPL.
-        
         Targets individuals earning $25.7k–$35.6k who would lose Medicaid
         under a 100% FPL threshold reduction.
         """
@@ -175,17 +170,13 @@ class MedicaidPolicySimulator:
     def _cond_age_18_55_random(self, df: pd.DataFrame, rate: float) -> pd.Series:
         """
         Mask for working-age adults (18–55) with Bernoulli(rate) selection.
-        
+
         Used for modeling administrative churn: a fraction of eligible
         working-age enrollees lose coverage due to paperwork/barriers.
-        
-        Args:
-            df: Population dataframe
-            rate: Disenrollment rate (e.g., 0.08 for 8%)
         """
         ages = df['Age_Group'].apply(self._extract_age_from_group)
         base_mask = (ages >= 18) & (ages <= 55)
-        
+
         np.random.seed(42)
         r = np.random.rand(len(df))
         return base_mask & (r < rate)
@@ -193,10 +184,6 @@ class MedicaidPolicySimulator:
     def _cond_immigrant_proxy(self, df: pd.DataFrame) -> pd.Series:
         """
         Mask for individuals estimated as immigrants using race/ethnicity proxy.
-        
-        Uses race/ethnicity-specific probabilities of being an immigrant
-        or first-generation resident to estimate who would be affected by
-        immigrant coverage restrictions.
         """
         immigrant_prob_by_race = {
             'Hispanic_Latino': 0.35,
@@ -211,7 +198,7 @@ class MedicaidPolicySimulator:
         }
         races = df['Race_Ethnicity']
         probs = races.map(lambda r: immigrant_prob_by_race.get(r, 0.10))
-        
+
         np.random.seed(42)
         draws = np.random.rand(len(df))
         return draws < probs
@@ -224,41 +211,22 @@ class MedicaidPolicySimulator:
         """
         Apply a Medicaid coverage policy defined in a CSV config file.
 
-        Policy CSV columns:
-          - Policy_Name: Name/identifier
-          - Target_Field: Usually 'Medicaid_Status'
-          - Condition: Comparison ('==' or '!=')
-          - Value: Target value ('True', 'False', etc.)
-          - Action: Named condition ('Income_Between_100_138_FPL', etc.)
-          - Coverage_Change: Result ('Uninsured', 'Keep', etc.)
-          - Note: Explanation
-
         Multiple rows are OR-ed: first matching rule wins.
-
-        Args:
-            pop_df: Population dataframe from model.py
-            policy_df: Policy configuration dataframe
-
-        Returns:
-            Population with policy-adjusted coverage
         """
         result = pop_df.copy()
-        
-        # Ensure Medicaid status is inferred
+
         if 'Medicaid_Status' not in result.columns:
             result['Medicaid_Status'] = result.apply(
                 self.infer_medicaid_status, axis=1
             ).apply(lambda x: x[0])
-        
+
         result['Original_Insurance'] = result['Health_Insurance_Status']
-        
-        # Initialize changes: everyone keeps current status by default
+
         changes = [
             {'change': row['Health_Insurance_Status'], 'notes': 'No change'}
             for _, row in result.iterrows()
         ]
 
-        # Apply each rule in the policy CSV
         for _, rule in policy_df.iterrows():
             target_field = rule['Target_Field']
             cond = rule['Condition']
@@ -268,29 +236,23 @@ class MedicaidPolicySimulator:
             coverage_change = rule['Coverage_Change']
             note = rule['Note']
 
-            # Evaluate the named action condition
             if pd.isna(action) or action == '':
-                # No action specified; skip this rule
                 continue
 
             if 'Income_Between_100_138_FPL' in str(action):
                 mask_action = self._cond_income_between_100_138_fpl(result)
             elif 'Age_18_55_Random_' in str(action):
-                # Extract rate from action string (e.g., 'Age_18_55_Random_0.08')
                 try:
                     rate = float(str(action).split('_')[-1])
                     mask_action = self._cond_age_18_55_random(result, rate)
                 except (ValueError, IndexError):
-                    # Malformed action; skip
                     continue
             elif 'Immigrant_Proxy' in str(action):
                 mask_action = self._cond_immigrant_proxy(result)
             else:
-                # Unknown action; skip
                 logger.warning(f"Unknown action in policy: {action}")
                 continue
 
-            # Evaluate the target field condition
             if cond == '==' and str(value).lower() == 'true':
                 mask_target = (result[target_field] == True)
             elif cond == '==' and str(value).lower() == 'false':
@@ -298,19 +260,15 @@ class MedicaidPolicySimulator:
             elif cond == '!=':
                 mask_target = (result[target_field] != value)
             else:
-                # Default: string equality
                 mask_target = (result[target_field].astype(str) == str(value))
 
-            # Combine conditions
             if op == 'AND':
                 mask = mask_target & mask_action
             else:
-                mask = mask_target & mask_action  # Only AND supported for now
+                mask = mask_target & mask_action
 
-            # Apply this rule where mask is True (first match wins)
             for idx in result[mask].index:
                 if changes[idx]['change'] == result.loc[idx, 'Health_Insurance_Status']:
-                    # No prior change; apply this rule
                     if coverage_change == 'Uninsured':
                         changes[idx]['change'] = 'Uninsured'
                     elif coverage_change in ['No_Change', 'Keep']:
@@ -327,25 +285,25 @@ class MedicaidPolicySimulator:
 
     def apply_baseline(self, pop_df: pd.DataFrame) -> pd.DataFrame:
         """
-        Apply baseline scenario: current Medicaid expansion (138% FPL).
-        No policy changes; keep existing coverage.
-
-        Args:
-            pop_df: Population dataframe from model.py
-
-        Returns:
-            Population with baseline coverage assignments
+        Baseline scenario: current Medicaid expansion (138% FPL).
+        No coverage changes; keeps existing insurance and screening.
         """
         result = pop_df.copy()
         if 'Medicaid_Status' not in result.columns:
             result['Medicaid_Status'] = result.apply(
                 self.infer_medicaid_status, axis=1
             ).apply(lambda x: x[0])
-        
+
         result['Policy_Coverage_Change'] = 'No Change'
         result['Policy_Notes'] = 'Baseline - 138% FPL threshold maintained'
         result['Coverage_Status_After_Policy'] = result['Health_Insurance_Status']
-        
+
+        # Recompute screening using the SAME logic, but baseline insurance
+        result = self.screening_calculator.assign_screening_to_population(
+            result,
+            insurance_column='Coverage_Status_After_Policy'
+        )
+
         return result
 
     # ========================================================================
@@ -355,23 +313,17 @@ class MedicaidPolicySimulator:
     def _generate_comparison_report(self, scenarios: Dict) -> Dict:
         """
         Generate comparison report across all policy scenarios.
-
-        Args:
-            scenarios: Dict of {scenario_name: dataframe}
-
-        Returns:
-            Dict of {scenario_name: statistics}
         """
         comparison = {}
         for scenario_name, scenario_df in scenarios.items():
             insured_count = (scenario_df['Coverage_Status_After_Policy'] == 'Insured').sum()
             uninsured_count = (scenario_df['Coverage_Status_After_Policy'] == 'Uninsured').sum()
             total = len(scenario_df)
-            
+
             medicaid_estimated = 0
             if 'Medicaid_Status' in scenario_df.columns:
                 medicaid_estimated = (scenario_df['Medicaid_Status'] == True).sum()
-            
+
             coverage_change_to_uninsured = 0
             if 'Policy_Coverage_Change' in scenario_df.columns:
                 coverage_change_to_uninsured = (scenario_df['Policy_Coverage_Change'] == 'Uninsured').sum()
@@ -398,15 +350,7 @@ class MedicaidPolicySimulator:
         return comparison
 
     def _extract_age_from_group(self, age_group: str) -> int:
-        """
-        Extract approximate age from age group string (model.py categories).
-
-        Args:
-            age_group: Age group string (e.g., '45to49')
-
-        Returns:
-            Approximate age (midpoint of range)
-        """
+        """Approximate age from age group string."""
         age_map = {
             'Under5': 2,
             '5to9': 7,
@@ -443,11 +387,19 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Medicaid Policy Simulator (CSV-driven, fully configurable)"
+        description="Medicaid Policy Simulator (CSV-driven, screening-aware)"
     )
     parser.add_argument(
         "--population", required=True,
         help="Synthetic population CSV from model.py (e.g., synthetic_population.csv)"
+    )
+    parser.add_argument(
+        "--screening-joint-dist", required=True,
+        help="Screening joint distributions CSV (same as model.py Stage 2)"
+    )
+    parser.add_argument(
+        "--colon-rates", required=True,
+        help="Colon screening rates CSV (same as model.py Stage 2)"
     )
     parser.add_argument(
         "--policy", action="append", required=False,
@@ -460,20 +412,23 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     print("=" * 80)
-    print("MEDICAID POLICY SIMULATOR (CSV-Driven)")
+    print("MEDICAID POLICY SIMULATOR (CSV-Driven + Screening Recalculation)")
     print("=" * 80)
 
     print(f"\nLoading synthetic population from: {args.population}")
     pop_df = pd.read_csv(args.population)
     print(f"✓ Loaded {len(pop_df)} individuals")
 
-    # Sanity check: required columns from model.py
-    required_cols = ['Income_Bracket', 'Health_Insurance_Status', 'Age_Group', 'Race_Ethnicity']
+    required_cols = ['Income_Bracket', 'Health_Insurance_Status', 'Age_Group',
+                     'Race_Ethnicity', 'Tract_GEOID']
     missing = [c for c in required_cols if c not in pop_df.columns]
     if missing:
         raise ValueError(f"Input file missing required columns from model.py: {missing}")
 
-    simulator = MedicaidPolicySimulator()
+    simulator = MedicaidPolicySimulator(
+        screening_joint_distributions_csv=args.screening_joint_dist,
+        colon_rates_csv=args.colon_rates,
+    )
 
     scenarios = {}
 
@@ -492,17 +447,24 @@ if __name__ == "__main__":
             print("\n" + "-" * 80)
             print(f"Loading policy from: {policy_path}")
             policy_df = pd.read_csv(policy_path)
-            
+
             if len(policy_df) == 0:
-                print(f"⚠ Policy file is empty; skipping")
+                print("⚠ Policy file is empty; skipping")
                 continue
-            
+
             policy_name = policy_df['Policy_Name'].iloc[0] if 'Policy_Name' in policy_df.columns else policy_path
             print(f"Applying policy: {policy_name}")
-            
+
             policy_result = simulator.apply_policy_from_config(pop_df, policy_df)
+
+            # Recompute screening after policy based on Coverage_Status_After_Policy
+            policy_result = simulator.screening_calculator.assign_screening_to_population(
+                policy_result,
+                insurance_column='Coverage_Status_After_Policy'
+            )
+
             scenarios[policy_name] = policy_result
-            
+
             out_file = f"{args.output_dir}/population_medicaid_{policy_name}.csv"
             policy_result.to_csv(out_file, index=False)
             print(f"✓ Saved: {out_file}")
