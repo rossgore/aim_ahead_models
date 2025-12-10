@@ -1,0 +1,2 @@
+Policy_Name,Target_Field,Condition,Value,Action,Coverage_Change,Note
+Immigrant Restrictions,Medicaid_Status,==,True,Immigrant_Proxy,Uninsured,Immigrant coverage restrictions

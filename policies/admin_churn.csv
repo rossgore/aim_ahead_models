@@ -1,0 +1,2 @@
+Policy_Name,Target_Field,Condition,Value,Action,Coverage_Change,Note
+Admin Churn,Medicaid_Status,==,True,Age_18_55_Random_0.08,Uninsured,Administrative churn and work requirements

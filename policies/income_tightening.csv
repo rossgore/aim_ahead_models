@@ -1,0 +1,2 @@
+Policy_Name,Target_Field,Condition,Value,Action,Coverage_Change,Note
+Income Tightening,Medicaid_Status,==,True,Income_Between_100_138_FPL,Uninsured,Income exceeds 100% FPL threshold
