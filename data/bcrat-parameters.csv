@@ -1,0 +1,28 @@
+Parameter_Category,Parameter_Name,Parameter_Value,Description
+age_baseline_risk,risk_40to44,0.67,5-year baseline breast cancer risk for age 40-44 (women)
+age_baseline_risk,risk_45to49,1.02,5-year baseline breast cancer risk for age 45-49 (women)
+age_baseline_risk,risk_50to54,1.42,5-year baseline breast cancer risk for age 50-54 (women)
+age_baseline_risk,risk_55to59,1.73,5-year baseline breast cancer risk for age 55-59 (women)
+age_baseline_risk,risk_60to64,2.02,5-year baseline breast cancer risk for age 60-64 (women)
+age_baseline_risk,risk_65to69,2.28,5-year baseline breast cancer risk for age 65-69 (women)
+age_baseline_risk,risk_70to74,2.42,5-year baseline breast cancer risk for age 70-74 (women)
+gender_multiplier,female,1.0,Risk adjustment multiplier for Female (baseline)
+gender_multiplier,male,0.01,Risk adjustment multiplier for Male (breast cancer rare in men)
+race_multiplier,white,1.0,Risk adjustment multiplier for White (baseline)
+race_multiplier,black,0.95,Risk adjustment multiplier for Black/African American
+race_multiplier,hispanic,0.78,Risk adjustment multiplier for Hispanic/Latino
+race_multiplier,asian,0.76,Risk adjustment multiplier for Asian/Pacific Islander
+race_multiplier,aian,0.68,Risk adjustment multiplier for American Indian/Alaska Native
+race_multiplier,nhopi,0.76,Risk adjustment multiplier for Native Hawaiian/Pacific Islander
+race_multiplier,someother,0.78,Risk adjustment multiplier for Some Other Race
+race_multiplier,twoormore,0.85,Risk adjustment multiplier for Two or More Races
+income_multiplier,under20k,0.88,Risk adjustment multiplier for Under20k income
+income_multiplier,20kto35k,0.92,Risk adjustment multiplier for 20kto35k income
+income_multiplier,35kto50k,0.97,Risk adjustment multiplier for 35kto50k income
+income_multiplier,50kto75k,1.02,Risk adjustment multiplier for 50kto75k income
+income_multiplier,over75k,1.08,Risk adjustment multiplier for Over75k income
+education_multiplier,lessthanhs,0.85,Risk adjustment multiplier for LessThanHS education
+education_multiplier,hsgraduate,0.93,Risk adjustment multiplier for HSGraduate education
+education_multiplier,somecollege,1.02,Risk adjustment multiplier for SomeCollege education
+education_multiplier,bachelorplus,1.12,Risk adjustment multiplier for BachelorPlus education
+screening_effectiveness,mortality_reduction_rate,0.35,Proportion of mortality reduction with mammography screening

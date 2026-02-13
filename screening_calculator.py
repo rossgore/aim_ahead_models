@@ -1,15 +1,29 @@
 """
-Colon Cancer Screening Calculator
+Cancer Screening Calculator - Cancer-Agnostic Version
 
-Reusable module for screening probability calculation and status assignment.
-Extracted from IntegratedSyntheticPopulationPipeline to support both model.py
-and medicaid_policy_simulator.py without code duplication.
+Reusable module for cancer screening probability calculation and status assignment.
+Supports both colorectal and breast cancer screening with configurable parameters.
 
 This module encapsulates:
-- Screening eligibility checks (age 45-75)
+- Screening eligibility checks (age ranges vary by cancer type)
 - Screening joint factor lookups from CSV
 - Screening probability calculation with tract rates and demographic adjustments
 - Screening status assignment (Screened / Not_Screened)
+
+Usage:
+    # For colon cancer
+    colon_calculator = ScreeningCalculator(
+        cancer_type='colon',
+        screening_joint_distributions_csv='screening-joint-distributions.csv',
+        screening_rates_csv='colon-rates.csv'
+    )
+
+    # For breast cancer
+    breast_calculator = ScreeningCalculator(
+        cancer_type='breast',
+        screening_joint_distributions_csv='breast-screening-joint-distributions.csv',
+        screening_rates_csv='breast-cancer-rates.csv'
+    )
 """
 
 import pandas as pd
@@ -22,65 +36,114 @@ logger = logging.getLogger(__name__)
 
 class ScreeningCalculator:
     """
-    Handles colon cancer screening probability and status assignment.
-    
+    Handles cancer screening probability and status assignment.
+
     Designed to work with:
     - Screening joint distributions CSV (tract-level adjustment factors)
-    - Colon screening rates CSV (tract-level baseline rates)
-    
+    - Cancer screening rates CSV (tract-level baseline rates)
+
     All screening logic is INDEPENDENT of risk assessment.
     """
 
-    def __init__(self, 
-                 screening_joint_distributions_csv: str,
-                 colon_rates_csv: str):
+    # Age eligibility ranges by cancer type
+    AGE_ELIGIBILITY_RANGES = {
+        'colon': {
+            'min_age_group': '45to49',
+            'max_age_group': '75to79',
+            'eligible_ages': [
+                '45to49', '50to54', '55to59', '60to61', '62to64', 
+                '65to66', '67to69', '70to74', '75to79'
+            ],
+            'display_name': 'Eligible_45-75'
+        },
+        'breast': {
+            'min_age_group': '40to44',
+            'max_age_group': '70to74',
+            'eligible_ages': [
+                '40to44', '45to49', '50to54', '55to59', '60to61', 
+                '62to64', '65to66', '67to69', '70to74'
+            ],
+            'display_name': 'Eligible_40-74'
+        }
+    }
+
+    def __init__(
+        self, 
+        cancer_type: str,
+        screening_joint_distributions_csv: str, 
+        screening_rates_csv: str
+    ):
         """
         Initialize the screening calculator.
 
         Args:
+            cancer_type: Type of cancer ('colon' or 'breast')
             screening_joint_distributions_csv: Path to screening adjustment factors CSV
                 Expected columns: GEOID, {AGE_GROUP}_Screening_Adjustment, 
-                {INSURANCE}_Screening_Adjustment, {RACE}_Screening_Adjustment, etc.
-            colon_rates_csv: Path to tract-level screening rates CSV
-                Expected columns: GEOID, COLON_SCREEN_RATE (percentage 0-100)
+                                 {INSURANCE}_Screening_Adjustment, 
+                                 {RACE}_Screening_Adjustment, etc.
+            screening_rates_csv: Path to tract-level screening rates CSV
+                Expected columns: GEOID, {CANCER_TYPE}_SCREEN_RATE (percentage 0-100)
         """
-        logger.info("Initializing ScreeningCalculator...")
-        
+        if cancer_type.lower() not in ['colon', 'breast']:
+            raise ValueError(f"cancer_type must be 'colon' or 'breast', got: {cancer_type}")
+
+        self.cancer_type = cancer_type.lower()
+        self.age_config = self.AGE_ELIGIBILITY_RANGES[self.cancer_type]
+
+        logger.info(f"Initializing ScreeningCalculator for {self.cancer_type} cancer...")
+
         # Load screening joint distributions
         self.screening_joint_dist_df = pd.read_csv(screening_joint_distributions_csv)
         self.screening_joint_dict = dict(
-            zip(self.screening_joint_dist_df['GEOID'],
+            zip(self.screening_joint_dist_df['GEOID'], 
                 self.screening_joint_dist_df.to_dict('records'))
         )
-        logger.info(f"✓ Loaded screening joint distributions for {len(self.screening_joint_dict)} tracts")
-        
-        # Load colon screening rates
-        colon_rates_df = pd.read_csv(colon_rates_csv)
-        self.colon_rates_dict = dict(
-            zip(colon_rates_df['GEOID'], colon_rates_df['COLON_SCREEN_RATE'])
-        )
-        logger.info(f"✓ Loaded screening rates for {len(self.colon_rates_dict)} tracts\n")
+        logger.info(f"  Loaded screening joint distributions for "
+                   f"{len(self.screening_joint_dict)} tracts")
 
-    # ========================================================================
-    # SCREENING ELIGIBILITY AND ADJUSTMENTS
-    # ========================================================================
+        # Load screening rates
+        screening_rates_df = pd.read_csv(screening_rates_csv)
+
+        # Determine the screening rate column name
+        if self.cancer_type == 'colon':
+            rate_column = 'COLON_SCREEN_RATE'
+        elif self.cancer_type == 'breast':
+            rate_column = 'BREAST_SCREEN_RATE'
+        else:
+            rate_column = 'SCREEN_RATE'  # Fallback
+
+        if rate_column not in screening_rates_df.columns:
+            raise ValueError(
+                f"Expected column '{rate_column}' not found in {screening_rates_csv}. "
+                f"Available columns: {list(screening_rates_df.columns)}"
+            )
+
+        self.screening_rates_dict = dict(
+            zip(screening_rates_df['GEOID'], screening_rates_df[rate_column])
+        )
+        logger.info(f"  Loaded screening rates for {len(self.screening_rates_dict)} tracts")
+        logger.info(f"  Age eligibility: {self.age_config['display_name']}")
 
     def is_eligible_age_group(self, age_group: str) -> bool:
         """
-        Check if age group is eligible for screening (45-75 years).
+        Check if age group is eligible for screening based on cancer type.
 
         Args:
-            age_group: Age group string (e.g., '45to49', '50to54')
+            age_group: Age group string (e.g., '45to49', '50to54', '40to44')
 
         Returns:
             True if age group is in screening age range, False otherwise
         """
-        eligible_ages = ['45to49', '50to54', '55to59', '60to61', '62to64', '65to66',
-                         '67to69', '70to74', '75to79']
-        return age_group in eligible_ages
+        return age_group in self.age_config['eligible_ages']
 
-    def get_screening_joint_factors(self, geoid: str, age_group: str, race_ethnicity: str,
-                                     insurance_status: str) -> Tuple[float, float, float]:
+    def get_screening_joint_factors(
+        self, 
+        geoid: str, 
+        age_group: str, 
+        race_ethnicity: str, 
+        insurance_status: str
+    ) -> Tuple[float, float, float]:
         """
         Extract screening adjustment factors from screening joint distributions.
 
@@ -99,44 +162,44 @@ class ScreeningCalculator:
         """
         if geoid not in self.screening_joint_dict:
             # Fallback to neutral (1.0) adjustments if GEOID not found
-            return 1.0, 1.0, 1.0
+            return (1.0, 1.0, 1.0)
 
         row_data = self.screening_joint_dict[geoid]
 
         # Age adjustment (e.g., '45to49_Screening_Adjustment')
-        age_col = f'{age_group}_Screening_Adjustment'
+        age_col = f"{age_group}_Screening_Adjustment"
         age_adj = row_data.get(age_col, 1.0)
         if pd.isna(age_adj):
             age_adj = 1.0
 
         # Insurance adjustment (e.g., 'Insured_Screening_Adjustment')
-        insurance_col = f'{insurance_status}_Screening_Adjustment'
+        insurance_col = f"{insurance_status}_Screening_Adjustment"
         insurance_adj = row_data.get(insurance_col, 1.0)
         if pd.isna(insurance_adj):
             insurance_adj = 1.0
 
         # Race adjustment (e.g., 'White_NonHispanic_Screening_Adjustment')
-        race_col = f'{race_ethnicity}_Screening_Adjustment'
+        race_col = f"{race_ethnicity}_Screening_Adjustment"
         race_adj = row_data.get(race_col, 1.0)
         if pd.isna(race_adj):
             race_adj = 1.0
 
-        return float(age_adj), float(insurance_adj), float(race_adj)
+        return (float(age_adj), float(insurance_adj), float(race_adj))
 
-    # ========================================================================
-    # SCREENING PROBABILITY CALCULATION
-    # ========================================================================
-
-    def calculate_screening_probability(self, tract_rate: float,
-                                        geoid: str, age_group: str,
-                                        race_ethnicity: str,
-                                        insurance_status: str) -> float:
+    def calculate_screening_probability(
+        self, 
+        tract_rate: float, 
+        geoid: str, 
+        age_group: str, 
+        race_ethnicity: str, 
+        insurance_status: str
+    ) -> float:
         """
         Calculate individual screening probability using screening joint distributions.
 
         Formula:
-            adjusted_prob = tract_rate * age_adj * insurance_adj * race_adj
-            bounded to [0.01, 0.99]
+            adjusted_prob = tract_rate × age_adj × insurance_adj × race_adj
+            (bounded to [0.01, 0.99])
 
         This is INDEPENDENT of risk assessment.
 
@@ -162,17 +225,16 @@ class ScreeningCalculator:
 
         return adjusted_prob
 
-    # ========================================================================
-    # SCREENING STATUS ASSIGNMENT
-    # ========================================================================
-
-    def assign_screening_to_population(self, population_df: pd.DataFrame,
-                                      insurance_column: str = 'Health_Insurance_Status') -> pd.DataFrame:
+    def assign_screening_to_population(
+        self, 
+        population_df: pd.DataFrame,
+        insurance_column: str = 'Health_Insurance_Status'
+    ) -> pd.DataFrame:
         """
-        Assign colon cancer screening status to population using screening joint distributions.
+        Assign cancer screening status to population using screening joint distributions.
 
         For each individual:
-        1. Check if age eligible (45-75)
+        1. Check if age eligible (age range varies by cancer type)
         2. If ineligible: status='Not_Screened', probability=0.0
         3. If eligible: calculate prob using tract rate + adjustments, draw Bernoulli
 
@@ -181,15 +243,15 @@ class ScreeningCalculator:
                 - Tract_GEOID
                 - Age_Group
                 - Race_Ethnicity
-                - insurance_column (default: 'Health_Insurance_Status')
-            insurance_column: Name of insurance status column (allows flexibility
-                for policy scenarios with updated insurance columns)
+                - {insurance_column} (default: 'Health_Insurance_Status')
+            insurance_column: Name of insurance status column (allows flexibility 
+                             for policy scenarios with updated insurance columns)
 
         Returns:
             DataFrame with new columns:
-                - Age_Eligibility: 'Eligible_45_75' or 'Outside_45_75_range'
-                - Colon_Screening_Probability: Calculated probability
-                - Colon_Cancer_Screening_Status: 'Screened' or 'Not_Screened'
+                - Age_Eligibility: 'Eligible_{age_range}' or 'Outside_{age_range}'
+                - {Cancer_Type}_Screening_Probability: Calculated probability
+                - {Cancer_Type}_Cancer_Screening_Status: 'Screened' or 'Not_Screened'
         """
         screening_probs = []
         screening_status = []
@@ -202,13 +264,16 @@ class ScreeningCalculator:
                 # Not eligible for screening
                 screening_probs.append(0.0)
                 screening_status.append('Not_Screened')
-                age_eligibility.append('Outside_45_75_range')
+                age_eligibility.append(f"Outside_{self.age_config['display_name']}")
             else:
-                # Eligible: calculate probability and assign status
+                # Eligible - calculate probability and assign status
                 geoid = row['Tract_GEOID']
-                tract_rate_pct = self.colon_rates_dict.get(geoid, 68)  # Default to 68%
-                tract_rate = tract_rate_pct / 100.0  # Convert to decimal
 
+                # Get tract baseline rate (convert from percentage to decimal)
+                tract_rate_pct = self.screening_rates_dict.get(geoid, 68)  # Default 68%
+                tract_rate = tract_rate_pct / 100.0
+
+                # Calculate individual probability
                 prob = self.calculate_screening_probability(
                     tract_rate=tract_rate,
                     geoid=geoid,
@@ -217,17 +282,17 @@ class ScreeningCalculator:
                     insurance_status=row[insurance_column]
                 )
 
-                # Draw Bernoulli
+                # Draw Bernoulli to determine screening status
                 screens = np.random.random() < prob
 
                 screening_probs.append(prob)
                 screening_status.append('Screened' if screens else 'Not_Screened')
-                age_eligibility.append('Eligible_45_75')
+                age_eligibility.append(self.age_config['display_name'])
 
         # Add columns to dataframe
         result = population_df.copy()
         result['Age_Eligibility'] = age_eligibility
-        result['Colon_Screening_Probability'] = screening_probs
-        result['Colon_Cancer_Screening_Status'] = screening_status
+        result[f'{self.cancer_type.capitalize()}_Screening_Probability'] = screening_probs
+        result[f'{self.cancer_type.capitalize()}_Cancer_Screening_Status'] = screening_status
 
         return result
