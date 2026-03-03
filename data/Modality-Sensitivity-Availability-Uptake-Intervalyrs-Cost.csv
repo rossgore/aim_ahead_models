@@ -1,0 +1,6 @@
+"Modality","Sensitivity","Availability","Uptake","Interval (yrs)","Cost"
+"Colonoscopy","0.95","0.60","0.70","10","$1,500"
+"Sigmoidoscopy","0.75","0.45","0.65","5","$600"
+"Cologuard","0.92","0.80","0.85","3","$650"
+"FIT","0.74","0.90","0.80","1","$25"
+"FOBT","0.60","0.95","0.75","1","$15"
