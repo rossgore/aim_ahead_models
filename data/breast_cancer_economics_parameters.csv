@@ -1,0 +1,27 @@
+Parameter_Type,Parameter_Name,Parameter_Value,Unit,Description,Data_Source
+screening_procedures,mammography_cost,200.0,USD,Cost of screening mammography (2D or 3D) in 2023-2024 dollars,ASCO 2023 / Healthcare Cost Studies
+screening_procedures,screening_frequency_years,1.0,years,Recommended screening interval for average-risk women 40-74 (per USPSTF 2024),USPSTF Guidelines 2024
+economic_parameters,time_horizon,10.0,years,Years to project forward for cost-benefit analysis,Standard health economics
+economic_parameters,discount_rate,0.03,decimal,Annual discount rate for future costs (3%),Standard health economics
+economic_parameters,advanced_stage_reduction,0.25,decimal,Proportional reduction in advanced stage probability from mammography screening,web:70 Nature study / Swedish mammography trials
+treatment_costs,Stage_0,60637.0,USD,Treatment cost for Stage 0 (DCIS) breast cancer (2023 dollars),AHDB 2016 study / HealthCentral 2024
+treatment_costs,Stage_I,73760.0,USD,Treatment cost for Stage I breast cancer (2023 dollars),AHDB 2016 study / HealthCentral 2024
+treatment_costs,Stage_II,96474.0,USD,Treatment cost for Stage II breast cancer (2023 dollars),AHDB 2016 study / HealthCentral 2024
+treatment_costs,Stage_III,129387.0,USD,Treatment cost for Stage III breast cancer (2023 dollars),AHDB 2016 study / HealthCentral 2024
+treatment_costs,Stage_IV,134682.0,USD,Treatment cost for Stage IV breast cancer (2023 dollars),AHDB 2016 study / HealthCentral 2024
+survival_multipliers,Stage_0,1.0,multiplier,"Treatment cost multiplier for Stage 0 (DCIS, baseline)",Clinical outcomes / SEER survival data
+survival_multipliers,Stage_I,1.1,multiplier,Treatment cost multiplier for Stage I (10% higher - monitoring),Clinical outcomes / SEER survival data
+survival_multipliers,Stage_II,1.4,multiplier,Treatment cost multiplier for Stage II (40% higher - adjuvant therapy),Clinical outcomes / SEER survival data
+survival_multipliers,Stage_III,1.8,multiplier,Treatment cost multiplier for Stage III (80% higher - intensive treatment),Clinical outcomes / SEER survival data
+survival_multipliers,Stage_IV,2.2,multiplier,Treatment cost multiplier for Stage IV (120% higher - palliative/ongoing),Clinical outcomes / SEER survival data
+stage_distributions_screened,Stage_0,0.25,probability,Probability of Stage 0 (DCIS) diagnosis if screened,Nature 2018 / SEER mammography studies
+stage_distributions_screened,Stage_I,0.38,probability,Probability of Stage I diagnosis if screened,Nature 2018 / SEER mammography studies
+stage_distributions_screened,Stage_II,0.23,probability,Probability of Stage II diagnosis if screened,Nature 2018 / SEER mammography studies
+stage_distributions_screened,Stage_III,0.11,probability,Probability of Stage III diagnosis if screened,Nature 2018 / SEER mammography studies
+stage_distributions_screened,Stage_IV,0.03,probability,Probability of Stage IV diagnosis if screened,Nature 2018 / SEER mammography studies
+stage_distributions_unscreened,Stage_0,0.08,probability,Probability of Stage 0 (DCIS) diagnosis if not screened,Nature 2018 / SEER data for unscreened women
+stage_distributions_unscreened,Stage_I,0.26,probability,Probability of Stage I diagnosis if not screened,Nature 2018 / SEER data for unscreened women
+stage_distributions_unscreened,Stage_II,0.31,probability,Probability of Stage II diagnosis if not screened,Nature 2018 / SEER data for unscreened women
+stage_distributions_unscreened,Stage_III,0.24,probability,Probability of Stage III diagnosis if not screened,Nature 2018 / SEER data for unscreened women
+stage_distributions_unscreened,Stage_IV,0.11,probability,Probability of Stage IV diagnosis if not screened,Nature 2018 / SEER data for unscreened women
+default_risks,default_population_cancer_risk,0.012,decimal,Default breast cancer risk for women without risk data (1.2% lifetime risk for age 40-70),SEER / NCI breast cancer statistics
