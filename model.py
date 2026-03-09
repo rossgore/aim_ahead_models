@@ -39,6 +39,7 @@ from typing import Dict, Optional, Tuple
 import logging
 
 from screening_calculator import ScreeningCalculator
+from modality_assigner import ModalityAssigner
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger(__name__)
@@ -617,9 +618,21 @@ class IntegratedSyntheticPopulationPipeline:
         screening_col = f'{self.cancer_type.capitalize()}_Cancer_Screening_Status'
         screened = (with_screening[screening_col] == 'Screened').sum()
         logger.info(f"✓ Assigned screening status independently")
-        logger.info(f"  - Screened: {screened} ({screened/len(with_screening)*100:.1f}%)")
-        logger.info(f"  - Not screened: {len(with_screening) - screened} "
-                   f"({(len(with_screening) - screened)/len(with_screening)*100:.1f}%)")
+        logger.info(f" - Screened: {screened} ({screened/len(with_screening)*100:.1f}%)")
+        logger.info(f" - Not screened: {len(with_screening) - screened} ({(len(with_screening) - screened)/len(with_screening)*100:.1f}%)\n")
+
+        logger.info("Executing Stage 2b: Assigning Screening Modalities...")
+    
+        # Use the EXACT filename of your uploaded CSV
+        modality_assigner = ModalityAssigner(
+            cancer_type='colon',
+            screening_modalities_csv='data/Modality-Sensitivity-Availability-Uptake-Intervalyrs-Cost.csv' 
+        )
+        with_screening = modality_assigner.assign_modality_to_population(with_screening)
+
+        logger.info("=" * 80)
+        logger.info("STAGE 3: CALCULATING RISK ASSESSMENT (INDEPENDENT)")
+        logger.info("=" * 80)
 
         # Stage 3: Calculate risk
         final_results = self.assess_risk(with_screening)
