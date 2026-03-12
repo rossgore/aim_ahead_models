@@ -625,7 +625,7 @@ class IntegratedSyntheticPopulationPipeline:
     
         # Use the EXACT filename of your uploaded CSV
         modality_assigner = ModalityAssigner(
-            cancer_type='colon',
+            cancer_type=self.cancer_type,
             screening_modalities_csv='data/Modality-Sensitivity-Availability-Uptake-Intervalyrs-Cost.csv' 
         )
         with_screening = modality_assigner.assign_modality_to_population(with_screening)

@@ -53,14 +53,27 @@ class ModalityAssigner:
         self.normalized_weights = (modalities_df['combined_weight'] / total_weight).tolist()
         self.modality_names = modalities_df['modality'].tolist()
 
+
+    # def assign_modality_to_population(self, population_df: pd.DataFrame) -> pd.DataFrame:
+    #    """
+    #    Identifies screened individuals and assigns a modality based on probability weights.
+    #    """
+    #    if 'Colon_Cancer_Screening_Status' not in population_df.columns:
+    #        raise ValueError("Run Screening Calculator before ModalityAssigner")       
+    #    screened_mask = population_df['Colon_Cancer_Screening_Status'] == 'Screened'
+
+
     def assign_modality_to_population(self, population_df: pd.DataFrame) -> pd.DataFrame:
         """
         Identifies screened individuals and assigns a modality based on probability weights.
         """
-        if 'Colon_Cancer_Screening_Status' not in population_df.columns:
-            raise ValueError("Run Screening Calculator before ModalityAssigner")
+        # Dynamically determine the screening status column name
+        status_col = f"{self.cancer_type.capitalize()}_Cancer_Screening_Status"
+        
+        if status_col not in population_df.columns:
+            raise ValueError(f"Run Screening Calculator before ModalityAssigner. Missing column: {status_col}")
             
-        screened_mask = population_df['Colon_Cancer_Screening_Status'] == 'Screened'
+        screened_mask = population_df[status_col] == 'Screened'
         screened_df = population_df[screened_mask].copy()
         unscreened_df = population_df[~screened_mask].copy()
         
