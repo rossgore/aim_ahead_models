@@ -28,7 +28,8 @@ class ModalityAssigner:
             'Availability': 'availability_weight',
             'Uptake': 'patient_uptake',
             'Interval (yrs)': 'interval_years',
-            'Cost': 'cost_usd'
+            'Cost': 'cost_usd',
+            'Sensitivity': 'sensitivity'
         }
         modalities_df = modalities_df.rename(columns=column_mapping)
         
@@ -53,15 +54,9 @@ class ModalityAssigner:
         self.normalized_weights = (modalities_df['combined_weight'] / total_weight).tolist()
         self.modality_names = modalities_df['modality'].tolist()
 
-
-    # def assign_modality_to_population(self, population_df: pd.DataFrame) -> pd.DataFrame:
-    #    """
-    #    Identifies screened individuals and assigns a modality based on probability weights.
-    #    """
-    #    if 'Colon_Cancer_Screening_Status' not in population_df.columns:
-    #        raise ValueError("Run Screening Calculator before ModalityAssigner")       
-    #    screened_mask = population_df['Colon_Cancer_Screening_Status'] == 'Screened'
-
+        # Dictionary mapping modality to its sensitivity
+        self.modality_sensitivities = dict(zip(modalities_df['modality'], modalities_df['sensitivity']))
+        
 
     def assign_modality_to_population(self, population_df: pd.DataFrame) -> pd.DataFrame:
         """
