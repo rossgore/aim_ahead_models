@@ -636,7 +636,6 @@ class IntegratedSyntheticPopulationPipeline:
 
         logger.info("Executing Stage 2b: Assigning Screening Modalities...")
     
-        # Use the EXACT filename of your uploaded CSV
         modality_assigner = ModalityAssigner(
             cancer_type=self.cancer_type,
             screening_modalities_csv=self.screening_modalities_csv #'data/Modality-Sensitivity-Availability-Uptake-Intervalyrs-Cost.csv' 
