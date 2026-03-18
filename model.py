@@ -108,6 +108,8 @@ class IntegratedSyntheticPopulationPipeline:
         self.cancer_type = cancer_type.lower()
         self.age_mapping = self.CANCER_AGE_MAPPINGS[self.cancer_type]
 
+        self.screening_modalities_csv = screening_modalities_csv
+
         logger.info("=" * 80)
         logger.info(f"INITIALIZING INTEGRATED SYNTHETIC POPULATION PIPELINE")
         logger.info(f"Cancer Type: {self.cancer_type.upper()}")
@@ -637,7 +639,7 @@ class IntegratedSyntheticPopulationPipeline:
         # Use the EXACT filename of your uploaded CSV
         modality_assigner = ModalityAssigner(
             cancer_type=self.cancer_type,
-            screening_modalities_csv='data/Modality-Sensitivity-Availability-Uptake-Intervalyrs-Cost.csv' 
+            screening_modalities_csv=self.screening_modalities_csv #'data/Modality-Sensitivity-Availability-Uptake-Intervalyrs-Cost.csv' 
         )
         with_screening = modality_assigner.assign_modality_to_population(with_screening)
 
