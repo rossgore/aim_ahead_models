@@ -329,15 +329,14 @@ class MedicaidPolicySimulator:
             policy_population,
             insurance_column='Coverage_Status_After_Policy'
         )
-
-        # Rename screening columns to indicate policy scenario
+        
+        # Duplicate screening columns to indicate policy scenario 
+        # (We duplicate instead of renaming so the economics model can still find the standard column)
         screening_status_col = f'{self.cancer_type.capitalize()}_Cancer_Screening_Status'
         screening_prob_col = f'{self.cancer_type.capitalize()}_Screening_Probability'
 
-        with_new_screening = with_new_screening.rename(columns={
-            screening_status_col: f'{screening_status_col}_After_Policy',
-            screening_prob_col: f'{screening_prob_col}_After_Policy'
-        })
+        with_new_screening[f'{screening_status_col}_After_Policy'] = with_new_screening[screening_status_col]
+        with_new_screening[f'{screening_prob_col}_After_Policy'] = with_new_screening[screening_prob_col]
 
         # Report screening changes
         lost_medicaid = with_new_screening['Lost_Medicaid'] == True
@@ -383,10 +382,30 @@ class MedicaidPolicySimulator:
         logger.info("CALCULATING HEALTHCARE COSTS")
         logger.info("=" * 80)
 
-        # Calculate baseline costs
+        # --- FIX: Align Baseline Columns ---
+        # Ensure baseline has the policy-specific columns with default values 
+        # so Pandas properly appends '_policy' suffixes during the economics model merge.
+        baseline_copy = baseline_population.copy()
+        
+        baseline_copy['Coverage_Status_After_Policy'] = baseline_copy['Health_Insurance_Status']
+        if 'Lost_Medicaid' not in baseline_copy.columns:
+            baseline_copy['Lost_Medicaid'] = False
+        if 'Still_Eligible' not in baseline_copy.columns:
+            baseline_copy['Still_Eligible'] = True
+            
+        screening_status_col = f'{self.cancer_type.capitalize()}_Cancer_Screening_Status'
+        screening_prob_col = f'{self.cancer_type.capitalize()}_Screening_Probability'
+        
+        if screening_status_col in baseline_copy.columns:
+            baseline_copy[f'{screening_status_col}_After_Policy'] = baseline_copy[screening_status_col]
+        if screening_prob_col in baseline_copy.columns:
+            baseline_copy[f'{screening_prob_col}_After_Policy'] = baseline_copy[screening_prob_col]
+        # -----------------------------------
+
+        # Calculate baseline costs (using the aligned copy)
         logger.info("\n1. Calculating baseline costs...")
         baseline_with_costs = self.economics_model.apply_costs_to_population(
-            baseline_population
+            baseline_copy
         )
 
         # Calculate policy costs
@@ -408,7 +427,6 @@ class MedicaidPolicySimulator:
             'policy_costs': policy_with_costs,
             'comparison': comparison
         }
-
     def run_scenario(
         self,
         scenario: str,

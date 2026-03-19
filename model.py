@@ -85,16 +85,11 @@ class IntegratedSyntheticPopulationPipeline:
         }
     }
 
-    def __init__(
-        self,
-        cancer_type: str,
-        demographics_csv: str,
-        ipf_joint_distributions_csv: str,
-        screening_joint_distributions_csv: str,
-        screening_rates_csv: str,
-        risk_parameters_csv: str,
-        scaling_factor: int = 100
-    ):
+    def __init__(self, cancer_type: str, demographics_csv: str, 
+                 ipf_joint_distributions_csv: str, screening_joint_distributions_csv: str, 
+                 screening_rates_csv: str, risk_parameters_csv: str, 
+                 screening_modalities_csv: str,
+                 scaling_factor: int = 100):
         """
         Initialize the integrated pipeline.
 
@@ -112,6 +107,8 @@ class IntegratedSyntheticPopulationPipeline:
 
         self.cancer_type = cancer_type.lower()
         self.age_mapping = self.CANCER_AGE_MAPPINGS[self.cancer_type]
+
+        self.screening_modalities_csv = screening_modalities_csv
 
         logger.info("=" * 80)
         logger.info(f"INITIALIZING INTEGRATED SYNTHETIC POPULATION PIPELINE")
@@ -218,6 +215,10 @@ class IntegratedSyntheticPopulationPipeline:
 
             elif category == 'screening_effectiveness':
                 params['screening_effectiveness'] = category_data.iloc[0]['Parameter_Value']
+
+            elif category == 'screening_effectiveness':
+                # Milestone 2: This is now a fallback/deprecated value
+                params['screening_effectiveness_fallback'] = category_data.iloc[0]['Parameter_Value']
 
         return params
 
@@ -511,7 +512,9 @@ class IntegratedSyntheticPopulationPipeline:
         gender: str, 
         race_ethnicity: str, 
         income_bracket: str, 
-        education_level: str
+        education_level: str,
+        screening_modality: str,
+        modality_sensitivities: dict = None
     ) -> Optional[Dict]:
         """Calculate cancer risk for individual INDEPENDENT of screening status."""
         cancer_age = self._map_age_group(age_group)
@@ -536,9 +539,17 @@ class IntegratedSyntheticPopulationPipeline:
         combined_multiplier = gender_mult * race_mult * income_mult * education_mult
         unscreened_risk = baseline_risk * combined_multiplier
 
-        screening_effectiveness = self.risk_parameters['screening_effectiveness']
+        #screening_effectiveness = self.risk_parameters['screening_effectiveness']
+        #screened_risk = unscreened_risk * (1 - screening_effectiveness)
+        if screening_modality != 'None' and modality_sensitivities and screening_modality in modality_sensitivities:
+            screening_effectiveness = modality_sensitivities[screening_modality]
+        else:
+            screening_effectiveness = self.risk_parameters.get('screening_effectiveness_fallback', 
+                                      self.risk_parameters.get('screening_effectiveness', 0.0))
+
         screened_risk = unscreened_risk * (1 - screening_effectiveness)
 
+        
         return {
             'Unscreened_Risk': unscreened_risk,
             'Screened_Risk': screened_risk,
@@ -560,7 +571,7 @@ class IntegratedSyntheticPopulationPipeline:
         else:
             return 'High'
 
-    def assess_risk(self, population_df: pd.DataFrame) -> pd.DataFrame:
+    def assess_risk(self, population_df: pd.DataFrame, modality_sensitivities: dict = None) -> pd.DataFrame:
         """Calculate risk for entire population INDEPENDENT."""
         logger.info("=" * 80)
         logger.info(f"STAGE 3: CALCULATING RISK ASSESSMENT (INDEPENDENT - {self.cancer_type.upper()})")
@@ -574,7 +585,9 @@ class IntegratedSyntheticPopulationPipeline:
                 row['Gender'],
                 row['Race_Ethnicity'],
                 row['Income_Bracket'],
-                row['Education_Level']
+                row['Education_Level'],
+                row.get('Screening_Modality', 'None'),
+                modality_sensitivities
             )
 
             if risk is not None:
@@ -623,10 +636,9 @@ class IntegratedSyntheticPopulationPipeline:
 
         logger.info("Executing Stage 2b: Assigning Screening Modalities...")
     
-        # Use the EXACT filename of your uploaded CSV
         modality_assigner = ModalityAssigner(
-            cancer_type='colon',
-            screening_modalities_csv='data/Modality-Sensitivity-Availability-Uptake-Intervalyrs-Cost.csv' 
+            cancer_type=self.cancer_type,
+            screening_modalities_csv=self.screening_modalities_csv #'data/Modality-Sensitivity-Availability-Uptake-Intervalyrs-Cost.csv' 
         )
         with_screening = modality_assigner.assign_modality_to_population(with_screening)
 
@@ -635,7 +647,11 @@ class IntegratedSyntheticPopulationPipeline:
         logger.info("=" * 80)
 
         # Stage 3: Calculate risk
-        final_results = self.assess_risk(with_screening)
+        #final_results = self.assess_risk(with_screening)
+        final_results = self.assess_risk(
+            with_screening, 
+            modality_sensitivities=modality_assigner.modality_sensitivities
+        )
         logger.info(f"✓ Stage 3 complete")
 
         # Save results
@@ -708,6 +724,8 @@ if __name__ == "__main__":
                        help='Cancer screening rates CSV')
     parser.add_argument('--risk-parameters', required=True,
                        help='Risk parameters CSV file (CCRAT or BCRAT)')
+    parser.add_argument('--screening-modalities', required=True,
+                       help='Screening modalities CSV file')
     parser.add_argument('--output', required=True,
                        help='Output CSV file')
     parser.add_argument('--scaling-factor', type=int, default=100,
@@ -722,6 +740,7 @@ if __name__ == "__main__":
         screening_joint_distributions_csv=args.screening_joint_dist,
         screening_rates_csv=args.screening_rates,
         risk_parameters_csv=args.risk_parameters,
+        screening_modalities_csv=args.screening_modalities,  # <--- NEW LINE
         scaling_factor=args.scaling_factor
     )
 
