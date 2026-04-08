@@ -100,6 +100,7 @@ class CancerEconomicsModel:
             # Standardize column names
             column_mapping = {'Modality': 'modality', 'Cost': 'cost_usd'}
             modalities_df = modalities_df.rename(columns=column_mapping)
+            modalities_df['cost_usd'] = modalities_df['cost_usd'].astype(str).str.replace(r'[\$,]', '', regex=True).astype(float)
             
             # Filter by cancer type if the column is present
             if 'cancer_type' in modalities_df.columns:
